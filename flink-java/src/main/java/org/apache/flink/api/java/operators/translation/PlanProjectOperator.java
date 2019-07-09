@@ -18,6 +18,7 @@
 
 package org.apache.flink.api.java.operators.translation;
 
+import org.apache.flink.annotation.Internal;
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.functions.AbstractRichFunction;
 import org.apache.flink.api.common.functions.MapFunction;
@@ -26,29 +27,33 @@ import org.apache.flink.api.common.operators.base.MapOperatorBase;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.java.tuple.Tuple;
 
+/**
+ * A map operator that retains a subset of fields from incoming tuples.
+ *
+ * @param <T> Input tuple type
+ * @param <R> Output tuple type
+ */
+@Internal
 public class PlanProjectOperator<T, R extends Tuple> extends MapOperatorBase<T, R, MapFunction<T, R>> {
 
 	public PlanProjectOperator(int[] fields, String name,
 								TypeInformation<T> inType, TypeInformation<R> outType,
-								ExecutionConfig executionConfig)
-	{
+								ExecutionConfig executionConfig) {
 		super(PlanProjectOperator.<T, R, Tuple>createTypedProjector(fields), new UnaryOperatorInformation<T, R>(inType, outType), name);
 	}
-	
+
 	@SuppressWarnings("unchecked")
 	private static <T, R extends Tuple, X extends Tuple> MapFunction<T, R> createTypedProjector(int[] fields) {
 		return (MapFunction<T, R>) new MapProjector<X, R>(fields);
 	}
-	
-	
-	public static final class MapProjector<T extends Tuple, R extends Tuple> 
-			extends AbstractRichFunction implements MapFunction<T, R>
-	{
+
+	private static final class MapProjector<T extends Tuple, R extends Tuple>
+			extends AbstractRichFunction implements MapFunction<T, R> {
 		private static final long serialVersionUID = 1L;
-		
+
 		private final int[] fields;
 		private final Tuple outTuple;
-		
+
 		private MapProjector(int[] fields) {
 			this.fields = fields;
 			try {
@@ -67,7 +72,7 @@ public class PlanProjectOperator<T, R extends Tuple> extends MapOperatorBase<T, 
 			for (int i = 0; i < fields.length; i++) {
 				outTuple.setField(inTuple.getField(fields[i]), i);
 			}
-			
+
 			return (R) outTuple;
 		}
 	}

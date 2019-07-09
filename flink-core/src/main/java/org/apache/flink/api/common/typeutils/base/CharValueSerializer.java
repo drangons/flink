@@ -20,17 +20,20 @@ package org.apache.flink.api.common.typeutils.base;
 
 import java.io.IOException;
 
+import org.apache.flink.annotation.Internal;
+import org.apache.flink.api.common.typeutils.SimpleTypeSerializerSnapshot;
+import org.apache.flink.api.common.typeutils.TypeSerializerSnapshot;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
 import org.apache.flink.types.CharValue;
 
+@Internal
 public class CharValueSerializer extends TypeSerializerSingleton<CharValue> {
 
 	private static final long serialVersionUID = 1L;
 	
 	public static final CharValueSerializer INSTANCE = new CharValueSerializer();
-	
-	
+
 	@Override
 	public boolean isImmutableType() {
 		return false;
@@ -79,7 +82,20 @@ public class CharValueSerializer extends TypeSerializerSingleton<CharValue> {
 	}
 
 	@Override
-	public boolean canEqual(Object obj) {
-		return obj instanceof CharValueSerializer;
+	public TypeSerializerSnapshot<CharValue> snapshotConfiguration() {
+		return new CharValueSerializerSnapshot();
+	}
+
+	// ------------------------------------------------------------------------
+
+	/**
+	 * Serializer configuration snapshot for compatibility and format evolution.
+	 */
+	@SuppressWarnings("WeakerAccess")
+	public static final class CharValueSerializerSnapshot extends SimpleTypeSerializerSnapshot<CharValue> {
+
+		public CharValueSerializerSnapshot() {
+			super(() -> INSTANCE);
+		}
 	}
 }

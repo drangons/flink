@@ -18,6 +18,15 @@
 
 package org.apache.flink.runtime.memory;
 
+import org.apache.flink.core.memory.HybridMemorySegment;
+import org.apache.flink.core.memory.MemorySegment;
+import org.apache.flink.core.memory.MemorySegmentFactory;
+import org.apache.flink.core.memory.MemoryType;
+import org.apache.flink.util.MathUtils;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.nio.ByteBuffer;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -27,24 +36,19 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.NoSuchElementException;
 import java.util.Set;
-
-import org.apache.flink.core.memory.HeapMemorySegment;
-import org.apache.flink.core.memory.HybridMemorySegment;
-import org.apache.flink.core.memory.MemorySegment;
-import org.apache.flink.core.memory.MemoryType;
-import org.apache.flink.runtime.util.MathUtils;
 
 /**
  * The memory manager governs the memory that Flink uses for sorting, hashing, and caching. Memory
  * is represented in segments of equal size. Operators allocate the memory by requesting a number
  * of memory segments.
- * <p>
- * The memory may be represented as on-heap byte arrays ({@link HeapMemorySegment}), or as off-heap
- * memory regions ({@link HybridMemorySegment}). Which kind of memory the MemoryManager serves can
+ *
+ * <p>The memory may be represented as on-heap byte arrays or as off-heap memory regions
+ * (both via {@link HybridMemorySegment}). Which kind of memory the MemoryManager serves can
  * be passed as an argument to the initialization.
- * <p>
- * The memory manager can either pre-allocate all memory, or allocate the memory on demand. In the
+ *
+ * <p>The memory manager can either pre-allocate all memory, or allocate the memory on demand. In the
  * former version, memory will be occupied and reserved from start on, which means that no OutOfMemoryError
  * can come while requesting memory. Released memory will also return to the MemoryManager's pool.
  * On-demand allocation means that the memory manager only keeps track how many memory segments are
@@ -53,6 +57,7 @@ import org.apache.flink.runtime.util.MathUtils;
  */
 public class MemoryManager {
 
+	private static final Logger LOG = LoggerFactory.getLogger(MemoryManager.class);
 	/** The default memory page size. Currently set to 32 KiBytes. */
 	public static final int DEFAULT_PAGE_SIZE = 32 * 1024;
 
@@ -66,35 +71,35 @@ public class MemoryManager {
 
 	/** The memory pool from which we draw memory segments. Specific to on-heap or off-heap memory */
 	private final MemoryPool memoryPool;
-	
-	/** Memory segments allocated per memory owner */
+
+	/** Memory segments allocated per memory owner. */
 	private final HashMap<Object, Set<MemorySegment>> allocatedSegments;
 
-	/** The type of memory governed by this memory manager */
+	/** The type of memory governed by this memory manager. */
 	private final MemoryType memoryType;
-	
-	/** mask used to round down sizes to multiples of the page size */
+
+	/** Mask used to round down sizes to multiples of the page size. */
 	private final long roundingMask;
 
-	/** The size of the memory segments */
+	/** The size of the memory segments. */
 	private final int pageSize;
 
 	/** The initial total size, for verification. */
 	private final int totalNumPages;
 
-	/** The total size of the memory managed by this memory manager */
+	/** The total size of the memory managed by this memory manager. */
 	private final long memorySize;
 
-	/** Number of slots of the task manager */
+	/** Number of slots of the task manager. */
 	private final int numberOfSlots;
 
-	/** Flag marking whether the memory manager immediately allocates the memory */
+	/** Flag marking whether the memory manager immediately allocates the memory. */
 	private final boolean isPreAllocated;
 
-	/** The number of memory pages that have not been allocated and are available for lazy allocation */
+	/** The number of memory pages that have not been allocated and are available for lazy allocation. */
 	private int numNonAllocatedPages;
 
-	/** flag whether the close() has already been invoked */
+	/** Flag whether the close() has already been invoked. */
 	private boolean isShutDown;
 
 
@@ -157,17 +162,30 @@ public class MemoryManager {
 
 		this.numNonAllocatedPages = preAllocateMemory ? 0 : this.totalNumPages;
 		final int memToAllocate = preAllocateMemory ? this.totalNumPages : 0;
-		
+
 		switch (memoryType) {
 			case HEAP:
-				this.memoryPool = new HeapMemoryPool(memToAllocate, pageSize);
+				this.memoryPool = new HybridHeapMemoryPool(memToAllocate, pageSize);
 				break;
 			case OFF_HEAP:
+				if (!preAllocateMemory) {
+					LOG.warn("It is advisable to set 'taskmanager.memory.preallocate' to true when" +
+						" the memory type 'taskmanager.memory.off-heap' is set to true.");
+				}
 				this.memoryPool = new HybridOffHeapMemoryPool(memToAllocate, pageSize);
 				break;
 			default:
 				throw new IllegalArgumentException("unrecognized memory type: " + memoryType);
 		}
+
+		LOG.debug("Initialized MemoryManager with total memory size {}, number of slots {}, page size {}, " +
+				"memory type {}, pre allocate memory {} and number of non allocated pages {}.",
+			memorySize,
+			numberOfSlots,
+			pageSize,
+			memoryType,
+			preAllocateMemory,
+			numNonAllocatedPages);
 	}
 
 	// ------------------------------------------------------------------------
@@ -182,8 +200,7 @@ public class MemoryManager {
 	 */
 	public void shutdown() {
 		// -------------------- BEGIN CRITICAL SECTION -------------------
-		synchronized (lock)
-		{
+		synchronized (lock) {
 			if (!isShutDown) {
 				// mark as shutdown and release memory
 				isShutDown = true;
@@ -195,7 +212,7 @@ public class MemoryManager {
 						seg.free();
 					}
 				}
-				
+
 				memoryPool.clear();
 			}
 		}
@@ -235,7 +252,7 @@ public class MemoryManager {
 	 *
 	 * @param owner The owner to associate with the memory segment, for the fallback release.
 	 * @param numPages The number of pages to allocate.
-	 * @return A list with the memory segments.   
+	 * @return A list with the memory segments.
 	 * @throws MemoryAllocationException Thrown, if this memory manager does not have the requested amount
 	 *                                   of memory pages any more.
 	 */
@@ -249,7 +266,7 @@ public class MemoryManager {
 	 * Allocates a set of memory segments from this memory manager. If the memory manager pre-allocated the
 	 * segments, they will be taken from the pool of memory segments. Otherwise, they will be allocated
 	 * as part of this call.
-	 * 
+	 *
 	 * @param owner The owner to associate with the memory segment, for the fallback release.
 	 * @param target The list into which to put the allocated memory pages.
 	 * @param numPages The number of pages to allocate.
@@ -257,8 +274,7 @@ public class MemoryManager {
 	 *                                   of memory pages any more.
 	 */
 	public void allocatePages(Object owner, List<MemorySegment> target, int numPages)
-			throws MemoryAllocationException
-	{
+			throws MemoryAllocationException {
 		// sanity check
 		if (owner == null) {
 			throw new IllegalArgumentException("The memory owner must not be null.");
@@ -270,8 +286,7 @@ public class MemoryManager {
 		}
 
 		// -------------------- BEGIN CRITICAL SECTION -------------------
-		synchronized (lock)
-		{
+		synchronized (lock) {
 			if (isShutDown) {
 				throw new IllegalStateException("Memory manager has been shut down.");
 			}
@@ -312,8 +327,8 @@ public class MemoryManager {
 	/**
 	 * Tries to release the memory for the specified segment. If the segment has already been released or
 	 * is null, the request is simply ignored.
-	 * <p>
-	 * If the memory manager manages pre-allocated memory, the memory segment goes back to the memory pool.
+	 *
+	 * <p>If the memory manager manages pre-allocated memory, the memory segment goes back to the memory pool.
 	 * Otherwise, the segment is only freed and made eligible for reclamation by the GC.
 	 *
 	 * @param segment The segment to be released.
@@ -326,10 +341,9 @@ public class MemoryManager {
 		}
 
 		final Object owner = segment.getOwner();
-		
+
 		// -------------------- BEGIN CRITICAL SECTION -------------------
-		synchronized (lock)
-		{
+		synchronized (lock) {
 			// prevent double return to this memory manager
 			if (segment.isFreed()) {
 				return;
@@ -367,10 +381,10 @@ public class MemoryManager {
 
 	/**
 	 * Tries to release many memory segments together.
-	 * <p>
-	 * If the memory manager manages pre-allocated memory, the memory segment goes back to the memory pool.
+	 *
+	 * <p>If the memory manager manages pre-allocated memory, the memory segment goes back to the memory pool.
 	 * Otherwise, the segment is only freed and made eligible for reclamation by the GC.
-	 * 
+	 *
 	 * @param segments The segments to be released.
 	 * @throws NullPointerException Thrown, if the given collection is null.
 	 * @throws IllegalArgumentException Thrown, id the segments are of an incompatible type.
@@ -381,8 +395,7 @@ public class MemoryManager {
 		}
 
 		// -------------------- BEGIN CRITICAL SECTION -------------------
-		synchronized (lock)
-		{
+		synchronized (lock) {
 			if (isShutDown) {
 				throw new IllegalStateException("Memory manager has been shut down.");
 			}
@@ -442,7 +455,7 @@ public class MemoryManager {
 					// the only way to exit the loop
 					successfullyReleased = true;
 				}
-				catch (ConcurrentModificationException e) {
+				catch (ConcurrentModificationException | NoSuchElementException e) {
 					// this may happen in the case where an asynchronous
 					// call releases the memory. fall through the loop and try again
 				}
@@ -452,7 +465,7 @@ public class MemoryManager {
 	}
 
 	/**
-	 * Releases all memory segments for the given owner. 
+	 * Releases all memory segments for the given owner.
 	 *
 	 * @param owner The owner memory segments are to be released.
 	 */
@@ -462,8 +475,7 @@ public class MemoryManager {
 		}
 
 		// -------------------- BEGIN CRITICAL SECTION -------------------
-		synchronized (lock)
-		{
+		synchronized (lock) {
 			if (isShutDown) {
 				throw new IllegalStateException("Memory manager has been shut down.");
 			}
@@ -500,7 +512,7 @@ public class MemoryManager {
 
 	/**
 	 * Gets the type of memory (heap / off-heap) managed by this memory manager.
-	 * 
+	 *
 	 * @return The type of memory managed by this memory manager.
 	 */
 	public MemoryType getMemoryType() {
@@ -549,14 +561,14 @@ public class MemoryManager {
 	 * than the page size) is not included.
 	 *
 	 * @param fraction the fraction of the total memory per slot
-	 * @return The number of pages to which 
+	 * @return The number of pages to which
 	 */
 	public int computeNumberOfPages(double fraction) {
 		if (fraction <= 0 || fraction > 1) {
 			throw new IllegalArgumentException("The fraction of memory to allocate must within (0, 1].");
 		}
 
-		return (int)(totalNumPages * fraction / numberOfSlots);
+		return (int) (totalNumPages * fraction / numberOfSlots);
 	}
 
 	/**
@@ -566,7 +578,7 @@ public class MemoryManager {
 	 * @return The number of pages corresponding to the memory fraction.
 	 */
 	public long computeMemorySize(double fraction) {
-		return pageSize * computeNumberOfPages(fraction);
+		return pageSize * (long) computeNumberOfPages(fraction);
 	}
 
 	/**
@@ -577,13 +589,13 @@ public class MemoryManager {
 	public long roundDownToPageSizeMultiple(long numBytes) {
 		return numBytes & roundingMask;
 	}
-	
+
 
 	// ------------------------------------------------------------------------
 	//  Memory Pools
 	// ------------------------------------------------------------------------
 
-	static abstract class MemoryPool {
+	abstract static class MemoryPool {
 
 		abstract int getNumberOfAvailableMemorySegments();
 
@@ -592,46 +604,46 @@ public class MemoryManager {
 		abstract MemorySegment requestSegmentFromPool(Object owner);
 
 		abstract void returnSegmentToPool(MemorySegment segment);
-		
+
 		abstract void clear();
 	}
 
-	static final class HeapMemoryPool extends MemoryPool {
+	static final class HybridHeapMemoryPool extends MemoryPool {
 
-		/** The collection of available memory segments */
+		/** The collection of available memory segments. */
 		private final ArrayDeque<byte[]> availableMemory;
 
 		private final int segmentSize;
 
-		public HeapMemoryPool(int numInitialSegments, int segmentSize) {
-			this.availableMemory = new ArrayDeque<byte[]>(numInitialSegments);
+		HybridHeapMemoryPool(int numInitialSegments, int segmentSize) {
+			this.availableMemory = new ArrayDeque<>(numInitialSegments);
 			this.segmentSize = segmentSize;
-			
+
 			for (int i = 0; i < numInitialSegments; i++) {
 				this.availableMemory.add(new byte[segmentSize]);
 			}
 		}
 
 		@Override
-		HeapMemorySegment allocateNewSegment(Object owner) {
-			return HeapMemorySegment.FACTORY.allocateUnpooledSegment(segmentSize, owner);
+		MemorySegment allocateNewSegment(Object owner) {
+			return MemorySegmentFactory.allocateUnpooledSegment(segmentSize, owner);
 		}
 
 		@Override
-		HeapMemorySegment requestSegmentFromPool(Object owner) {
+		MemorySegment requestSegmentFromPool(Object owner) {
 			byte[] buf = availableMemory.remove();
-			return  HeapMemorySegment.FACTORY.wrapPooledHeapMemory(buf, owner);
+			return  MemorySegmentFactory.wrapPooledHeapMemory(buf, owner);
 		}
 
 		@Override
 		void returnSegmentToPool(MemorySegment segment) {
-			if (segment.getClass() == HeapMemorySegment.class) {
-				HeapMemorySegment heapSegment = (HeapMemorySegment) segment;
+			if (segment.getClass() == HybridMemorySegment.class) {
+				HybridMemorySegment heapSegment = (HybridMemorySegment) segment;
 				availableMemory.add(heapSegment.getArray());
 				heapSegment.free();
 			}
 			else {
-				throw new IllegalArgumentException("Memory segment is not a " + HeapMemorySegment.class.getSimpleName());
+				throw new IllegalArgumentException("Memory segment is not a " + HybridMemorySegment.class.getSimpleName());
 			}
 		}
 
@@ -645,16 +657,16 @@ public class MemoryManager {
 			availableMemory.clear();
 		}
 	}
-	
+
 	static final class HybridOffHeapMemoryPool extends MemoryPool {
 
-		/** The collection of available memory segments */
+		/** The collection of available memory segments. */
 		private final ArrayDeque<ByteBuffer> availableMemory;
 
 		private final int segmentSize;
 
-		public HybridOffHeapMemoryPool(int numInitialSegments, int segmentSize) {
-			this.availableMemory = new ArrayDeque<ByteBuffer>(numInitialSegments);
+		HybridOffHeapMemoryPool(int numInitialSegments, int segmentSize) {
+			this.availableMemory = new ArrayDeque<>(numInitialSegments);
 			this.segmentSize = segmentSize;
 
 			for (int i = 0; i < numInitialSegments; i++) {
@@ -663,15 +675,14 @@ public class MemoryManager {
 		}
 
 		@Override
-		HybridMemorySegment allocateNewSegment(Object owner) {
-			ByteBuffer memory = ByteBuffer.allocateDirect(segmentSize);
-			return HybridMemorySegment.FACTORY.wrapPooledOffHeapMemory(memory, owner);
+		MemorySegment allocateNewSegment(Object owner) {
+			return MemorySegmentFactory.allocateUnpooledOffHeapMemory(segmentSize, owner);
 		}
 
 		@Override
-		HybridMemorySegment requestSegmentFromPool(Object owner) {
+		MemorySegment requestSegmentFromPool(Object owner) {
 			ByteBuffer buf = availableMemory.remove();
-			return HybridMemorySegment.FACTORY.wrapPooledOffHeapMemory(buf, owner);
+			return MemorySegmentFactory.wrapPooledOffHeapMemory(buf, owner);
 		}
 
 		@Override
@@ -683,7 +694,7 @@ public class MemoryManager {
 				hybridSegment.free();
 			}
 			else {
-				throw new IllegalArgumentException("Memory segment is not a " + HeapMemorySegment.class.getSimpleName());
+				throw new IllegalArgumentException("Memory segment is not a " + HybridMemorySegment.class.getSimpleName());
 			}
 		}
 

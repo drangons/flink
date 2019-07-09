@@ -17,40 +17,47 @@
 
 package org.apache.flink.streaming.api.operators;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
-
+import org.apache.flink.annotation.Internal;
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.functions.FoldFunction;
-import org.apache.flink.api.common.state.OperatorState;
+import org.apache.flink.api.common.state.ValueState;
+import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
-import org.apache.flink.core.memory.InputViewDataInputStreamWrapper;
-import org.apache.flink.core.memory.OutputViewDataOutputStreamWrapper;
-import org.apache.flink.streaming.api.watermark.Watermark;
+import org.apache.flink.core.memory.DataInputViewStreamWrapper;
+import org.apache.flink.core.memory.DataOutputViewStreamWrapper;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+
+/**
+ * A {@link StreamOperator} for executing a {@link FoldFunction} on a
+ * {@link org.apache.flink.streaming.api.datastream.KeyedStream}.
+ *
+ * @deprecated will be removed in a future version
+ */
+@Internal
+@Deprecated
 public class StreamGroupedFold<IN, OUT, KEY>
 		extends AbstractUdfStreamOperator<OUT, FoldFunction<IN, OUT>>
 		implements OneInputStreamOperator<IN, OUT>, OutputTypeConfigurable<OUT> {
 
 	private static final long serialVersionUID = 1L;
-	
+
 	private static final String STATE_NAME = "_op_state";
 
 	// Grouped values
-	private transient OperatorState<OUT> values;
-	
+	private transient ValueState<OUT> values;
+
 	private transient OUT initialValue;
-	
+
 	// Initial value serialization
 	private byte[] serializedInitialValue;
-	
+
 	private TypeSerializer<OUT> outTypeSerializer;
-	
+
 	public StreamGroupedFold(FoldFunction<IN, OUT> folder, OUT initialValue) {
 		super(folder);
 		this.initialValue = initialValue;
@@ -65,12 +72,13 @@ public class StreamGroupedFold<IN, OUT, KEY>
 					"operator. Probably the setOutputType method was not called.");
 		}
 
-		ByteArrayInputStream bais = new ByteArrayInputStream(serializedInitialValue);
-		InputViewDataInputStreamWrapper in = new InputViewDataInputStreamWrapper(
-				new DataInputStream(bais)
-		);
-		initialValue = outTypeSerializer.deserialize(in);
-		values = createKeyValueState(STATE_NAME, outTypeSerializer, null);
+		try (ByteArrayInputStream bais = new ByteArrayInputStream(serializedInitialValue);
+			DataInputViewStreamWrapper in = new DataInputViewStreamWrapper(bais)) {
+			initialValue = outTypeSerializer.deserialize(in);
+		}
+
+		ValueStateDescriptor<OUT> stateId = new ValueStateDescriptor<>(STATE_NAME, outTypeSerializer);
+		values = getPartitionedState(stateId);
 	}
 
 	@Override
@@ -89,18 +97,11 @@ public class StreamGroupedFold<IN, OUT, KEY>
 	}
 
 	@Override
-	public void processWatermark(Watermark mark) throws Exception {
-		output.emitWatermark(mark);
-	}
-
-	@Override
 	public void setOutputType(TypeInformation<OUT> outTypeInfo, ExecutionConfig executionConfig) {
 		outTypeSerializer = outTypeInfo.createSerializer(executionConfig);
 
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
-		OutputViewDataOutputStreamWrapper out = new OutputViewDataOutputStreamWrapper(
-				new DataOutputStream(baos)
-		);
+		DataOutputViewStreamWrapper out = new DataOutputViewStreamWrapper(baos);
 
 		try {
 			outTypeSerializer.serialize(initialValue, out);

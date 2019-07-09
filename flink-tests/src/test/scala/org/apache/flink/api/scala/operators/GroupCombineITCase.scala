@@ -19,9 +19,9 @@ package org.apache.flink.api.scala.operators
 
 import org.apache.flink.api.common.operators.Order
 import org.apache.flink.api.java.io.DiscardingOutputFormat
-import org.apache.flink.api.scala.{ExecutionEnvironment, _}
+import org.apache.flink.api.scala._
 import org.apache.flink.api.scala.util.CollectionDataSets
-import org.apache.flink.test.javaApiOperators.GroupCombineITCase
+import org.apache.flink.test.operators.GroupCombineITCase.ScalaGroupCombineFunctionExample
 import org.apache.flink.test.util.MultipleProgramsTestBase.TestExecutionMode
 import org.apache.flink.test.util.MultipleProgramsTestBase
 import org.apache.flink.util.Collector
@@ -43,28 +43,35 @@ class GroupCombineITCase(mode: TestExecutionMode) extends MultipleProgramsTestBa
       .map(str => Tuple1(str))
 
     // all methods on DataSet
-    ds.combineGroup(new GroupCombineITCase.ScalaGroupCombineFunctionExample())
+    ds.combineGroup(new ScalaGroupCombineFunctionExample())
       .output(new DiscardingOutputFormat[Tuple1[String]])
 
-    ds.combineGroup((in, out: Collector[Tuple1[String]]) => in.toSet foreach (out.collect))
+    ds
+      .combineGroup(
+        (in: Iterator[Tuple1[String]], out: Collector[Tuple1[String]]) =>
+          in.toSet foreach (out.collect))
       .output(new DiscardingOutputFormat[Tuple1[String]])
 
     // all methods on UnsortedGrouping
     ds.groupBy(0)
-      .combineGroup(new GroupCombineITCase.ScalaGroupCombineFunctionExample())
+      .combineGroup(new ScalaGroupCombineFunctionExample())
       .output(new DiscardingOutputFormat[Tuple1[String]])
 
     ds.groupBy(0)
-      .combineGroup((in, out: Collector[Tuple1[String]]) => in.toSet foreach (out.collect))
+      .combineGroup(
+        (in: Iterator[Tuple1[String]], out: Collector[Tuple1[String]]) =>
+          in.toSet foreach (out.collect))
       .output(new DiscardingOutputFormat[Tuple1[String]])
 
     // all methods on SortedGrouping
     ds.groupBy(0).sortGroup(0, Order.ASCENDING)
-      .combineGroup(new GroupCombineITCase.ScalaGroupCombineFunctionExample())
+      .combineGroup(new ScalaGroupCombineFunctionExample())
       .output(new DiscardingOutputFormat[Tuple1[String]])
 
     ds.groupBy(0).sortGroup(0, Order.ASCENDING)
-      .combineGroup((in, out: Collector[Tuple1[String]]) => in.toSet foreach (out.collect))
+      .combineGroup(
+        (in: Iterator[Tuple1[String]], out: Collector[Tuple1[String]]) =>
+          in.toSet foreach (out.collect))
       .output(new DiscardingOutputFormat[Tuple1[String]])
 
     env.execute()

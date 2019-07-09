@@ -47,7 +47,6 @@ import org.apache.flink.optimizer.dag.BulkIterationNode;
 import org.apache.flink.optimizer.dag.BulkPartialSolutionNode;
 import org.apache.flink.optimizer.dag.CoGroupNode;
 import org.apache.flink.optimizer.dag.CoGroupRawNode;
-import org.apache.flink.optimizer.dag.CollectorMapNode;
 import org.apache.flink.optimizer.dag.CrossNode;
 import org.apache.flink.optimizer.dag.DagConnection;
 import org.apache.flink.optimizer.dag.DataSinkNode;
@@ -77,8 +76,8 @@ import java.util.Map;
 /**
  * This traversal creates the optimizer DAG from a program.
  * It works as a visitor that walks the program's flow in a depth-first fashion, starting from the data sinks.
- * During the descend, it creates an optimizer node for each operator, respectively data source or -sink.
- * During the ascend, it connects the nodes to the full graph.
+ * During the descent it creates an optimizer node for each operator, respectively data source or sink.
+ * During the ascent it connects the nodes to the full graph.
  */
 public class GraphCreatingVisitor implements Visitor<Operator<?>> {
 
@@ -143,9 +142,6 @@ public class GraphCreatingVisitor implements Visitor<Operator<?>> {
 		}
 		else if (c instanceof MapPartitionOperatorBase) {
 			n = new MapPartitionNode((MapPartitionOperatorBase<?, ?, ?>) c);
-		}
-		else if (c instanceof org.apache.flink.api.common.operators.base.CollectorMapOperatorBase) {
-			n = new CollectorMapNode((org.apache.flink.api.common.operators.base.CollectorMapOperatorBase<?, ?, ?>) c);
 		}
 		else if (c instanceof FlatMapOperatorBase) {
 			n = new FlatMapNode((FlatMapOperatorBase<?, ?, ?>) c);
@@ -248,7 +244,11 @@ public class GraphCreatingVisitor implements Visitor<Operator<?>> {
 		if (n.getParallelism() < 1) {
 			// set the parallelism
 			int par = c.getParallelism();
-			if (par > 0) {
+			if (n instanceof BinaryUnionNode) {
+				// Keep parallelism of union undefined for now.
+				// It will be determined based on the parallelism of its successor.
+				par = -1;
+			} else if (par > 0) {
 				if (this.forceParallelism && par != this.defaultParallelism) {
 					par = this.defaultParallelism;
 					Optimizer.LOG.warn("The parallelism of nested dataflows (such as step functions in iterations) is " +

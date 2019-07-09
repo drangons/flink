@@ -18,38 +18,36 @@
 
 package org.apache.flink.util;
 
+import org.apache.flink.annotation.Internal;
+
 /**
- * An enumeration indicating the operating system that the engine runs on.
+ * An enumeration indicating the operating system that the JVM runs on.
  */
+@Internal
 public enum OperatingSystem {
 
-	// --------------------------------------------------------------------------------------------
-	//  Constants to extract the OS type from the java environment 
-	// --------------------------------------------------------------------------------------------
-	
 	LINUX,
 	WINDOWS,
 	MAC_OS,
 	FREE_BSD,
+	SOLARIS,
 	UNKNOWN;
-	
-	// --------------------------------------------------------------------------------------------
-	//  Constants to extract the OS type from the java environment 
-	// --------------------------------------------------------------------------------------------
-	
+
+	// ------------------------------------------------------------------------
+
 	/**
 	 * Gets the operating system that the JVM runs on from the java system properties.
 	 * this method returns <tt>UNKNOWN</tt>, if the operating system was not successfully determined.
-	 * 
+	 *
 	 * @return The enum constant for the operating system, or <tt>UNKNOWN</tt>, if it was not possible to determine.
 	 */
 	public static OperatingSystem getCurrentOperatingSystem() {
 		return os;
 	}
-	
+
 	/**
 	 * Checks whether the operating system this JVM runs on is Windows.
-	 * 
+	 *
 	 * @return <code>true</code> if the operating system this JVM runs on is
 	 *         Windows, <code>false</code> otherwise
 	 */
@@ -59,7 +57,7 @@ public enum OperatingSystem {
 
 	/**
 	 * Checks whether the operating system this JVM runs on is Linux.
-	 * 
+	 *
 	 * @return <code>true</code> if the operating system this JVM runs on is
 	 *         Linux, <code>false</code> otherwise
 	 */
@@ -69,7 +67,7 @@ public enum OperatingSystem {
 
 	/**
 	 * Checks whether the operating system this JVM runs on is Windows.
-	 * 
+	 *
 	 * @return <code>true</code> if the operating system this JVM runs on is
 	 *         Windows, <code>false</code> otherwise
 	 */
@@ -79,28 +77,38 @@ public enum OperatingSystem {
 
 	/**
 	 * Checks whether the operating system this JVM runs on is FreeBSD.
-	 * 
+	 *
 	 * @return <code>true</code> if the operating system this JVM runs on is
 	 *         FreeBSD, <code>false</code> otherwise
 	 */
 	public static boolean isFreeBSD() {
 		return getCurrentOperatingSystem() == FREE_BSD;
 	}
-	
+
+	/**
+	 * Checks whether the operating system this JVM runs on is Solaris.
+	 *
+	 * @return <code>true</code> if the operating system this JVM runs on is
+	 *         Solaris, <code>false</code> otherwise
+	 */
+	public static boolean isSolaris() {
+		return getCurrentOperatingSystem() == SOLARIS;
+	}
+
 	/**
 	 * The enum constant for the operating system.
 	 */
 	private static final OperatingSystem os = readOSFromSystemProperties();
-	
+
 	/**
 	 * Parses the operating system that the JVM runs on from the java system properties.
 	 * If the operating system was not successfully determined, this method returns {@code UNKNOWN}.
-	 * 
+	 *
 	 * @return The enum constant for the operating system, or {@code UNKNOWN}, if it was not possible to determine.
 	 */
 	private static OperatingSystem readOSFromSystemProperties() {
 		String osName = System.getProperty(OS_KEY);
-		
+
 		if (osName.startsWith(LINUX_OS_PREFIX)) {
 			return LINUX;
 		}
@@ -113,16 +121,18 @@ public enum OperatingSystem {
 		if (osName.startsWith(FREEBSD_OS_PREFIX)) {
 			return FREE_BSD;
 		}
-		
+		String osNameLowerCase = osName.toLowerCase();
+		if (osNameLowerCase.contains(SOLARIS_OS_INFIX_1) || osNameLowerCase.contains(SOLARIS_OS_INFIX_2)) {
+			return SOLARIS;
+		}
+
 		return UNKNOWN;
 	}
-	
-	
-	
+
 	// --------------------------------------------------------------------------------------------
-	//  Constants to extract the OS type from the java environment 
+	//  Constants to extract the OS type from the java environment
 	// --------------------------------------------------------------------------------------------
-	
+
 	/**
 	 * The key to extract the operating system name from the system properties.
 	 */
@@ -147,4 +157,14 @@ public enum OperatingSystem {
 	 * The expected prefix for FreeBSD.
 	 */
 	private static final String FREEBSD_OS_PREFIX = "FreeBSD";
+
+	/**
+	 * One expected infix for Solaris.
+	 */
+	private static final String SOLARIS_OS_INFIX_1 = "sunos";
+
+	/**
+	 * One expected infix for Solaris.
+	 */
+	private static final String SOLARIS_OS_INFIX_2 = "solaris";
 }

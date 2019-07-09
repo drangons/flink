@@ -19,13 +19,21 @@
 
 package org.apache.flink.types.parser;
 
+import org.apache.flink.annotation.PublicEvolving;
 
+@PublicEvolving
 public class ByteParser extends FieldParser<Byte> {
 
 	private byte result;
 
 	@Override
 	public int parseField(byte[] bytes, int startPos, int limit, byte[] delimiter, Byte reusable) {
+
+		if (startPos == limit) {
+			setErrorState(ParseErrorState.EMPTY_COLUMN);
+			return -1;
+		}
+
 		int val = 0;
 		boolean neg = false;
 
@@ -46,7 +54,7 @@ public class ByteParser extends FieldParser<Byte> {
 		for (int i = startPos; i < limit; i++) {
 			if (i < delimLimit && delimiterNext(bytes, i, delimiter)) {
 				if (i == startPos) {
-					setErrorState(ParseErrorState.EMPTY_STRING);
+					setErrorState(ParseErrorState.EMPTY_COLUMN);
 					return -1;
 				}
 				this.result = (byte) (neg ? -val : val);

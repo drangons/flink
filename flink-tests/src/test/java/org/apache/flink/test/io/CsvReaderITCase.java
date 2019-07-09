@@ -18,8 +18,6 @@
 
 package org.apache.flink.test.io;
 
-import com.google.common.base.Charsets;
-import com.google.common.io.Files;
 import org.apache.flink.api.java.DataSet;
 import org.apache.flink.api.java.ExecutionEnvironment;
 import org.apache.flink.api.java.tuple.Tuple8;
@@ -32,6 +30,8 @@ import org.apache.flink.types.IntValue;
 import org.apache.flink.types.LongValue;
 import org.apache.flink.types.ShortValue;
 import org.apache.flink.types.StringValue;
+import org.apache.flink.util.FileUtils;
+
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -40,7 +40,11 @@ import org.junit.runners.Parameterized;
 
 import java.io.File;
 import java.util.List;
+import java.util.Locale;
 
+/**
+ * Tests for {@link ExecutionEnvironment#readCsvFile}.
+ */
 @RunWith(Parameterized.class)
 public class CsvReaderITCase extends MultipleProgramsTestBase {
 	private String expected;
@@ -54,7 +58,7 @@ public class CsvReaderITCase extends MultipleProgramsTestBase {
 
 	private String createInputData(String data) throws Exception {
 		File file = tempFolder.newFile("input");
-		Files.write(data, file, Charsets.UTF_8);
+		FileUtils.writeFileUtf8(file, data);
 
 		return file.toURI().toString();
 	}
@@ -121,6 +125,9 @@ public class CsvReaderITCase extends MultipleProgramsTestBase {
 		compareResultAsTuples(result, expected);
 	}
 
+	/**
+	 * POJO.
+	 */
 	public static class POJOItem {
 		public String f1;
 		private int f2;
@@ -136,7 +143,7 @@ public class CsvReaderITCase extends MultipleProgramsTestBase {
 
 		@Override
 		public String toString() {
-			return String.format("%s,%d,%.02f", f1, f2, f3);
+			return String.format(Locale.US, "%s,%d,%.02f", f1, f2, f3);
 		}
 	}
 }

@@ -18,22 +18,42 @@
 
 package org.apache.flink.api.common.typeutils;
 
-import java.io.IOException;
-import java.io.Serializable;
-
+import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
 
+import java.io.IOException;
+import java.io.Serializable;
+
 /**
- * This interface describes the methods that are required for a data type to be handled by the pact
+ * This interface describes the methods that are required for a data type to be handled by the Flink
  * runtime. Specifically, this interface contains the serialization and copying methods.
- * <p>
- * The methods in this class are assumed to be stateless, such that it is effectively thread safe. Stateful
- * implementations of the methods may lead to unpredictable side effects and will compromise both stability and
- * correctness of the program.
- * 
+ *
+ * <p>The methods in this class are not necessarily thread safe. To avoid unpredictable side effects,
+ * it is recommended to call {@code duplicate()} method and use one serializer instance per thread.
+ *
+ * <p><b>Upgrading TypeSerializers to the new TypeSerializerSnapshot model</b>
+ *
+ * <p>This section is relevant if you implemented a TypeSerializer in Flink versions up to 1.6 and want
+ * to adapt that implementation to the new interfaces that support proper state schema evolution, while maintaining
+ * backwards compatibility. Please follow these steps:
+ *
+ * <ul>
+ *     <li>Change the type serializer's config snapshot to implement {@link TypeSerializerSnapshot}, rather
+ *     than extending {@code TypeSerializerConfigSnapshot} (as previously).
+ *     <li>If the above step was completed, then the upgrade is done. Otherwise, if changing to implement
+ *     {@link TypeSerializerSnapshot} directly in-place as the same class isn't possible (perhaps because the new snapshot
+ *     is intended to have completely different written contents or intended to have a different class name),
+ *     retain the old serializer snapshot class (extending {@code TypeSerializerConfigSnapshot}) under
+ *     the same name and give the updated serializer snapshot class (the one extending {@code TypeSerializerSnapshot})
+ *     a new name.
+ *     <li>Override the {@code TypeSerializerConfigSnapshot#resolveSchemaCompatibility(TypeSerializer)}
+ *     method to perform the compatibility check based on configuration written by the old serializer snapshot class.
+ * </ul>
+ *
  * @param <T> The data type that the serializer serializes.
  */
+@PublicEvolving
 public abstract class TypeSerializer<T> implements Serializable {
 	
 	private static final long serialVersionUID = 1L;
@@ -149,13 +169,30 @@ public abstract class TypeSerializer<T> implements Serializable {
 
 	public abstract boolean equals(Object obj);
 
-	/**
-	 * Returns true if the given object can be equaled with this object. If not, it returns false.
-	 *
-	 * @param obj Object which wants to take part in the equality relation
-	 * @return true if obj can be equaled with this, otherwise false
-	 */
-	public abstract boolean canEqual(Object obj);
-
 	public abstract int hashCode();
+
+	// --------------------------------------------------------------------------------------------
+	// Serializer configuration snapshot for checkpoints/savepoints
+	// --------------------------------------------------------------------------------------------
+
+	/**
+	 * Snapshots the configuration of this TypeSerializer. This method is only relevant if the serializer is
+	 * used to state stored in checkpoints/savepoints.
+	 *
+	 * <p>The snapshot of the TypeSerializer is supposed to contain all information that affects the serialization
+	 * format of the serializer. The snapshot serves two purposes: First, to reproduce the serializer when the
+	 * checkpoint/savepoint is restored, and second, to check whether the serialization format is compatible
+	 * with the serializer used in the restored program.
+	 *
+	 * <p><b>IMPORTANT:</b> TypeSerializerSnapshots changed after Flink 1.6. Serializers implemented against
+	 * Flink versions up to 1.6 should still work, but adjust to new model to enable state evolution and be
+	 * future-proof.
+	 * See the class-level comments, section "Upgrading TypeSerializers to the new TypeSerializerSnapshot model"
+	 * for details.
+	 *
+	 * @see TypeSerializerSnapshot#resolveSchemaCompatibility(TypeSerializer)
+	 *
+	 * @return snapshot of the serializer's current configuration (cannot be {@code null}).
+	 */
+	public abstract TypeSerializerSnapshot<T> snapshotConfiguration();
 }

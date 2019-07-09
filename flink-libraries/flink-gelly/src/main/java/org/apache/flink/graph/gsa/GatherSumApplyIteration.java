@@ -39,12 +39,14 @@ import org.apache.flink.api.java.typeutils.TypeExtractor;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.graph.Edge;
 import org.apache.flink.graph.EdgeDirection;
-import org.apache.flink.graph.Graph;
 import org.apache.flink.graph.Vertex;
+import org.apache.flink.graph.utils.GraphUtils;
+import org.apache.flink.types.LongValue;
 import org.apache.flink.util.Collector;
-import java.util.Map;
+import org.apache.flink.util.Preconditions;
 
-import com.google.common.base.Preconditions;
+import java.util.Collection;
+import java.util.Map;
 
 /**
  * This class represents iterative graph computations, programmed in a gather-sum-apply perspective.
@@ -103,7 +105,7 @@ public class GatherSumApplyIteration<K, VV, EV, M> implements CustomUnaryOperati
 	}
 
 	/**
-	 * Computes the results of the gather-sum-apply iteration
+	 * Computes the results of the gather-sum-apply iteration.
 	 *
 	 * @return The resulting DataSet
 	 */
@@ -115,31 +117,26 @@ public class GatherSumApplyIteration<K, VV, EV, M> implements CustomUnaryOperati
 
 		// Prepare type information
 		TypeInformation<K> keyType = ((TupleTypeInfo<?>) vertexDataSet.getType()).getTypeAt(0);
-		TypeInformation<M> messageType = TypeExtractor.createTypeInfo(GatherFunction.class, gather.getClass(), 2, null, null);
-		TypeInformation<Tuple2<K, M>> innerType = new TupleTypeInfo<Tuple2<K, M>>(keyType, messageType);
+		TypeInformation<M> messageType = TypeExtractor.createTypeInfo(gather, GatherFunction.class, gather.getClass(), 2);
+		TypeInformation<Tuple2<K, M>> innerType = new TupleTypeInfo<>(keyType, messageType);
 		TypeInformation<Vertex<K, VV>> outputType = vertexDataSet.getType();
-
-		// create a graph
-		Graph<K, VV, EV> graph =
-				Graph.fromDataSet(vertexDataSet, edgeDataSet, vertexDataSet.getExecutionEnvironment());
 
 		// check whether the numVertices option is set and, if so, compute the total number of vertices
 		// and set it within the gather, sum and apply functions
+
+		DataSet<LongValue> numberOfVertices = null;
 		if (this.configuration != null && this.configuration.isOptNumVertices()) {
 			try {
-				long numberOfVertices = graph.numberOfVertices();
-				gather.setNumberOfVertices(numberOfVertices);
-				sum.setNumberOfVertices(numberOfVertices);
-				apply.setNumberOfVertices(numberOfVertices);
+				numberOfVertices = GraphUtils.count(this.vertexDataSet);
 			} catch (Exception e) {
 				e.printStackTrace();
 			}
 		}
 
 		// Prepare UDFs
-		GatherUdf<K, VV, EV, M> gatherUdf = new GatherUdf<K, VV, EV, M>(gather, innerType);
-		SumUdf<K, VV, EV, M> sumUdf = new SumUdf<K, VV, EV, M>(sum, innerType);
-		ApplyUdf<K, VV, EV, M> applyUdf = new ApplyUdf<K, VV, EV, M>(apply, outputType);
+		GatherUdf<K, VV, EV, M> gatherUdf = new GatherUdf<>(gather, innerType);
+		SumUdf<K, VV, EV, M> sumUdf = new SumUdf<>(sum, innerType);
+		ApplyUdf<K, VV, EV, M> applyUdf = new ApplyUdf<>(apply, outputType);
 
 		final int[] zeroKeyPos = new int[] {0};
 		final DeltaIteration<Vertex<K, VV>, Vertex<K, VV>> iteration =
@@ -164,7 +161,7 @@ public class GatherSumApplyIteration<K, VV, EV, M> implements CustomUnaryOperati
 		}
 
 		// Prepare the neighbors
-		if(this.configuration != null) {
+		if (this.configuration != null) {
 			direction = this.configuration.getDirection();
 		}
 		DataSet<Tuple2<K, Neighbor<VV, EV>>> neighbors;
@@ -172,24 +169,24 @@ public class GatherSumApplyIteration<K, VV, EV, M> implements CustomUnaryOperati
 			case OUT:
 				neighbors = iteration
 				.getWorkset().join(edgeDataSet)
-				.where(0).equalTo(0).with(new ProjectKeyWithNeighborOUT<K, VV, EV>());
+				.where(0).equalTo(0).with(new ProjectKeyWithNeighborOUT<>());
 				break;
 			case IN:
 				neighbors = iteration
 				.getWorkset().join(edgeDataSet)
-				.where(0).equalTo(1).with(new ProjectKeyWithNeighborIN<K, VV, EV>());
+				.where(0).equalTo(1).with(new ProjectKeyWithNeighborIN<>());
 				break;
 			case ALL:
 				neighbors =  iteration
 						.getWorkset().join(edgeDataSet)
-						.where(0).equalTo(0).with(new ProjectKeyWithNeighborOUT<K, VV, EV>()).union(iteration
+						.where(0).equalTo(0).with(new ProjectKeyWithNeighborOUT<>()).union(iteration
 								.getWorkset().join(edgeDataSet)
-								.where(0).equalTo(1).with(new ProjectKeyWithNeighborIN<K, VV, EV>()));
+								.where(0).equalTo(1).with(new ProjectKeyWithNeighborIN<>()));
 				break;
 			default:
 				neighbors = iteration
 						.getWorkset().join(edgeDataSet)
-						.where(0).equalTo(0).with(new ProjectKeyWithNeighborOUT<K, VV, EV>());
+						.where(0).equalTo(0).with(new ProjectKeyWithNeighborOUT<>());
 				break;
 		}
 
@@ -203,6 +200,9 @@ public class GatherSumApplyIteration<K, VV, EV, M> implements CustomUnaryOperati
 			for (Tuple2<String, DataSet<?>> e : this.configuration.getGatherBcastVars()) {
 				gatherMapOperator = gatherMapOperator.withBroadcastSet(e.f1, e.f0);
 			}
+			if (this.configuration.isOptNumVertices()) {
+				gatherMapOperator = gatherMapOperator.withBroadcastSet(numberOfVertices, "number of vertices");
+			}
 		}
 		DataSet<Tuple2<K, M>> gatheredSet = gatherMapOperator;
 
@@ -214,6 +214,9 @@ public class GatherSumApplyIteration<K, VV, EV, M> implements CustomUnaryOperati
 		if (this.configuration != null) {
 			for (Tuple2<String, DataSet<?>> e : this.configuration.getSumBcastVars()) {
 				sumReduceOperator = sumReduceOperator.withBroadcastSet(e.f1, e.f0);
+			}
+			if (this.configuration.isOptNumVertices()) {
+				sumReduceOperator = sumReduceOperator.withBroadcastSet(numberOfVertices, "number of vertices");
 			}
 		}
 		DataSet<Tuple2<K, M>> summedSet = sumReduceOperator;
@@ -231,6 +234,9 @@ public class GatherSumApplyIteration<K, VV, EV, M> implements CustomUnaryOperati
 			for (Tuple2<String, DataSet<?>> e : this.configuration.getApplyBcastVars()) {
 				appliedSet = appliedSet.withBroadcastSet(e.f1, e.f0);
 			}
+			if (this.configuration.isOptNumVertices()) {
+				appliedSet = appliedSet.withBroadcastSet(numberOfVertices, "number of vertices");
+			}
 		}
 
 		// let the operator know that we preserve the key field
@@ -240,7 +246,7 @@ public class GatherSumApplyIteration<K, VV, EV, M> implements CustomUnaryOperati
 	}
 
 	/**
-	 * Creates a new gather-sum-apply iteration operator for graphs
+	 * Creates a new gather-sum-apply iteration operator for graphs.
 	 *
 	 * @param edges The edge DataSet
 	 *
@@ -257,11 +263,11 @@ public class GatherSumApplyIteration<K, VV, EV, M> implements CustomUnaryOperati
 	 *
 	 * @return An in stance of the gather-sum-apply graph computation operator.
 	 */
-	public static final <K, VV, EV, M> GatherSumApplyIteration<K, VV, EV, M>
+	public static <K, VV, EV, M> GatherSumApplyIteration<K, VV, EV, M>
 		withEdges(DataSet<Edge<K, EV>> edges, GatherFunction<VV, EV, M> gather,
 		SumFunction<VV, EV, M> sum, ApplyFunction<K, VV, M> apply, int maximumNumberOfIterations) {
 
-		return new GatherSumApplyIteration<K, VV, EV, M>(gather, sum, apply, edges, maximumNumberOfIterations);
+		return new GatherSumApplyIteration<>(gather, sum, apply, edges, maximumNumberOfIterations);
 	}
 
 	// --------------------------------------------------------------------------------------------
@@ -284,11 +290,15 @@ public class GatherSumApplyIteration<K, VV, EV, M> implements CustomUnaryOperati
 		@Override
 		public Tuple2<K, M> map(Tuple2<K, Neighbor<VV, EV>> neighborTuple) {
 			M result = this.gatherFunction.gather(neighborTuple.f1);
-			return new Tuple2<K, M>(neighborTuple.f0, result);
+			return new Tuple2<>(neighborTuple.f0, result);
 		}
 
 		@Override
 		public void open(Configuration parameters) throws Exception {
+			if (getRuntimeContext().hasBroadcastVariable("number of vertices")) {
+				Collection<LongValue> numberOfVertices = getRuntimeContext().getBroadcastVariable("number of vertices");
+				this.gatherFunction.setNumberOfVertices(numberOfVertices.iterator().next().getValue());
+			}
 			if (getIterationRuntimeContext().getSuperstepNumber() == 1) {
 				this.gatherFunction.init(getIterationRuntimeContext());
 			}
@@ -320,13 +330,27 @@ public class GatherSumApplyIteration<K, VV, EV, M> implements CustomUnaryOperati
 
 		@Override
 		public Tuple2<K, M> reduce(Tuple2<K, M> arg0, Tuple2<K, M> arg1) throws Exception {
-			K key = arg0.f0;
 			M result = this.sumFunction.sum(arg0.f1, arg1.f1);
-			return new Tuple2<K, M>(key, result);
+
+			// if the user returns value from the right argument then swap as
+			// in ReduceDriver.run()
+			if (result == arg1.f1) {
+				M tmp = arg1.f1;
+				arg1.f1 = arg0.f1;
+				arg0.f1 = tmp;
+			} else {
+				arg0.f1 = result;
+			}
+
+			return arg0;
 		}
 
 		@Override
 		public void open(Configuration parameters) throws Exception {
+			if (getRuntimeContext().hasBroadcastVariable("number of vertices")) {
+				Collection<LongValue> numberOfVertices = getRuntimeContext().getBroadcastVariable("number of vertices");
+				this.sumFunction.setNumberOfVertices(numberOfVertices.iterator().next().getValue());
+			}
 			if (getIterationRuntimeContext().getSuperstepNumber() == 1) {
 				this.sumFunction.init(getIterationRuntimeContext());
 			}
@@ -365,6 +389,10 @@ public class GatherSumApplyIteration<K, VV, EV, M> implements CustomUnaryOperati
 
 		@Override
 		public void open(Configuration parameters) throws Exception {
+			if (getRuntimeContext().hasBroadcastVariable("number of vertices")) {
+				Collection<LongValue> numberOfVertices = getRuntimeContext().getBroadcastVariable("number of vertices");
+				this.applyFunction.setNumberOfVertices(numberOfVertices.iterator().next().getValue());
+			}
 			if (getIterationRuntimeContext().getSuperstepNumber() == 1) {
 				this.applyFunction.init(getIterationRuntimeContext());
 			}
@@ -388,8 +416,8 @@ public class GatherSumApplyIteration<K, VV, EV, M> implements CustomUnaryOperati
 			Vertex<K, VV>, Edge<K, EV>, Tuple2<K, Neighbor<VV, EV>>> {
 
 		public void join(Vertex<K, VV> vertex, Edge<K, EV> edge, Collector<Tuple2<K, Neighbor<VV, EV>>> out) {
-			out.collect(new Tuple2<K, Neighbor<VV, EV>>(
-					edge.getTarget(), new Neighbor<VV, EV>(vertex.getValue(), edge.getValue())));
+			out.collect(new Tuple2<>(
+					edge.getTarget(), new Neighbor<>(vertex.getValue(), edge.getValue())));
 		}
 	}
 
@@ -399,8 +427,8 @@ public class GatherSumApplyIteration<K, VV, EV, M> implements CustomUnaryOperati
 			Vertex<K, VV>, Edge<K, EV>, Tuple2<K, Neighbor<VV, EV>>> {
 
 		public void join(Vertex<K, VV> vertex, Edge<K, EV> edge, Collector<Tuple2<K, Neighbor<VV, EV>>> out) {
-			out.collect(new Tuple2<K, Neighbor<VV, EV>>(
-					edge.getSource(), new Neighbor<VV, EV>(vertex.getValue(), edge.getValue())));
+			out.collect(new Tuple2<>(
+					edge.getSource(), new Neighbor<>(vertex.getValue(), edge.getValue())));
 		}
 	}
 

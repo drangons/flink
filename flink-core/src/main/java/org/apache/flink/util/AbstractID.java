@@ -18,38 +18,39 @@
 
 package org.apache.flink.util;
 
-import java.io.IOException;
-import java.util.Random;
+import org.apache.flink.annotation.PublicEvolving;
 
-import org.apache.flink.core.io.IOReadableWritable;
-import org.apache.flink.core.memory.DataInputView;
-import org.apache.flink.core.memory.DataOutputView;
+import java.util.Random;
 
 /**
  * A statistically unique identification number.
  */
-public class AbstractID implements IOReadableWritable, Comparable<AbstractID>, java.io.Serializable {
+@PublicEvolving
+public class AbstractID implements Comparable<AbstractID>, java.io.Serializable {
 
 	private static final long serialVersionUID = 1L;
-	
-	private static final Random RND = new Random();
-	
 
-	/** The size of a long in bytes */
+	private static final Random RND = new Random();
+
+	/** The size of a long in bytes. */
 	private static final int SIZE_OF_LONG = 8;
 
-	/** The size of the ID in byte */
+	/** The size of the ID in byte. */
 	public static final int SIZE = 2 * SIZE_OF_LONG;
-	
 
-	/** The upper part of the actual ID */
-	protected long upperPart;
+	// ------------------------------------------------------------------------
 
-	/** The lower part of the actual ID */
-	protected long lowerPart;
+	/** The upper part of the actual ID. */
+	protected final long upperPart;
+
+	/** The lower part of the actual ID. */
+	protected final long lowerPart;
+
+	/** The memoized value returned by toString(). */
+	private transient String hexString;
 
 	// --------------------------------------------------------------------------------------------
-	
+
 	/**
 	 * Constructs a new ID with a specific bytes value.
 	 */
@@ -74,10 +75,7 @@ public class AbstractID implements IOReadableWritable, Comparable<AbstractID>, j
 	}
 
 	/**
-	 * Creates a new abstract ID from the given one.
-	 * <p>
-	 * The given and the newly created abstract ID will be identical, i.e. a comparison by <code>equals</code> will
-	 * return <code>true</code> and both objects will have the same hash code.
+	 * Copy constructor: Creates a new abstract ID from the given one.
 	 *
 	 * @param id the abstract ID to copy
 	 */
@@ -96,7 +94,7 @@ public class AbstractID implements IOReadableWritable, Comparable<AbstractID>, j
 		this.lowerPart = RND.nextLong();
 		this.upperPart = RND.nextLong();
 	}
-	
+
 	// --------------------------------------------------------------------------------------------
 
 	/**
@@ -129,31 +127,33 @@ public class AbstractID implements IOReadableWritable, Comparable<AbstractID>, j
 		return bytes;
 	}
 
-	// --------------------------------------------------------------------------------------------
-	//  Serialization
-	// --------------------------------------------------------------------------------------------
+	/**
+	 * Returns pure String representation of the ID in hexadecimal. This method should be used to construct things like
+	 * paths etc., that require a stable representation and is therefore final.
+	 */
+	public final String toHexString() {
+		if (this.hexString == null) {
+			final byte[] ba = new byte[SIZE];
+			longToByteArray(this.lowerPart, ba, 0);
+			longToByteArray(this.upperPart, ba, SIZE_OF_LONG);
 
-	@Override
-	public void read(DataInputView in) throws IOException {
-		this.lowerPart = in.readLong();
-		this.upperPart = in.readLong();
-	}
+			this.hexString = StringUtils.byteToHexString(ba);
+		}
 
-	@Override
-	public void write(DataOutputView out) throws IOException {
-		out.writeLong(this.lowerPart);
-		out.writeLong(this.upperPart);
+		return this.hexString;
 	}
 
 	// --------------------------------------------------------------------------------------------
 	//  Standard Utilities
 	// --------------------------------------------------------------------------------------------
-	
+
 	@Override
 	public boolean equals(Object obj) {
-		if (obj != null && obj instanceof AbstractID) {
-			AbstractID src = (AbstractID) obj;
-			return src.lowerPart == this.lowerPart && src.upperPart == this.upperPart;
+		if (obj == this) {
+			return true;
+		} else if (obj != null && obj.getClass() == getClass()) {
+			AbstractID that = (AbstractID) obj;
+			return that.lowerPart == this.lowerPart && that.upperPart == this.upperPart;
 		} else {
 			return false;
 		}
@@ -166,25 +166,16 @@ public class AbstractID implements IOReadableWritable, Comparable<AbstractID>, j
 				((int)  this.upperPart) ^
 				((int) (this.upperPart >>> 32));
 	}
-	
+
 	@Override
 	public String toString() {
-		final byte[] ba = new byte[SIZE];
-		longToByteArray(this.lowerPart, ba, 0);
-		longToByteArray(this.upperPart, ba, SIZE_OF_LONG);
-		return StringUtils.byteToHexString(ba);
+		return toHexString();
 	}
 
-	public String toShortString() {
-		final byte[] ba = new byte[SIZE_OF_LONG];
-		longToByteArray(upperPart, ba, 0);
-		return StringUtils.byteToHexString(ba);
-	}
-	
 	@Override
 	public int compareTo(AbstractID o) {
-		int diff1 = (this.upperPart < o.upperPart) ? -1 : ((this.upperPart == o.upperPart) ? 0 : 1);
-		int diff2 = (this.lowerPart < o.lowerPart) ? -1 : ((this.lowerPart == o.lowerPart) ? 0 : 1);
+		int diff1 = Long.compare(this.upperPart, o.upperPart);
+		int diff2 = Long.compare(this.lowerPart, o.lowerPart);
 		return diff1 == 0 ? diff2 : diff1;
 	}
 

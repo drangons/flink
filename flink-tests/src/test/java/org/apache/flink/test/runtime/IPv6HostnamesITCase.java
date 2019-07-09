@@ -18,26 +18,26 @@
 
 package org.apache.flink.test.runtime;
 
-import akka.actor.ActorSystem;
 import org.apache.flink.api.common.functions.FlatMapFunction;
 import org.apache.flink.api.java.DataSet;
 import org.apache.flink.api.java.ExecutionEnvironment;
 import org.apache.flink.api.java.tuple.Tuple2;
-import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.runtime.StreamingMode;
+import org.apache.flink.configuration.JobManagerOptions;
+import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.runtime.akka.AkkaUtils;
+import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
 import org.apache.flink.test.testdata.WordCountData;
-import org.apache.flink.test.util.ForkableFlinkMiniCluster;
-
+import org.apache.flink.test.util.MiniClusterWithClientResource;
 import org.apache.flink.test.util.TestBaseUtils;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.NetUtils;
 import org.apache.flink.util.TestLogger;
 
+import akka.actor.ActorSystem;
+import org.junit.AssumptionViolatedException;
+import org.junit.Rule;
 import org.junit.Test;
-
-import scala.Some;
 
 import java.io.IOException;
 import java.net.Inet6Address;
@@ -48,45 +48,51 @@ import java.net.ServerSocket;
 import java.util.Enumeration;
 import java.util.List;
 
-import static org.junit.Assert.*;
+import scala.Some;
 
+import static org.junit.Assert.fail;
+
+/**
+ * Test proper handling of IPv6 address literals in URLs.
+ */
 @SuppressWarnings("serial")
 public class IPv6HostnamesITCase extends TestLogger {
-	
-	@Test
-	public void testClusterWithIPv6host() {
 
+	@Rule
+	public final MiniClusterWithClientResource miniClusterResource = new MiniClusterWithClientResource(
+		new MiniClusterResourceConfiguration.Builder()
+			.setConfiguration(getConfiguration())
+			.setNumberTaskManagers(2)
+			.setNumberSlotsPerTaskManager(2)
+			.build());
+
+	private Configuration getConfiguration() {
 		final Inet6Address ipv6address = getLocalIPv6Address();
 		if (ipv6address == null) {
-			System.err.println("--- Cannot find a non-loopback local IPv6 address that Akka/Netty can bind to; skipping IPv6HostnamesITCase");
-			return;
+			throw new AssumptionViolatedException("--- Cannot find a non-loopback local IPv6 address that Akka/Netty can bind to; skipping IPv6HostnamesITCase");
 		}
+		final String addressString = ipv6address.getHostAddress();
+		log.info("Test will use IPv6 address " + addressString + " for connection tests");
 
-		
-		
-		ForkableFlinkMiniCluster flink = null;
+		Configuration config = new Configuration();
+		config.setString(JobManagerOptions.ADDRESS, addressString);
+		config.setString(TaskManagerOptions.HOST, addressString);
+		config.setString(TaskManagerOptions.MANAGED_MEMORY_SIZE, "16m");
+		return config;
+	}
+
+	@Test
+	public void testClusterWithIPv6host() {
 		try {
-			final String addressString = ipv6address.getHostAddress();
-			log.info("Test will use IPv6 address " + addressString + " for connection tests");
-			
-			Configuration conf = new Configuration();
-			conf.setString(ConfigConstants.JOB_MANAGER_IPC_ADDRESS_KEY, addressString);
-			conf.setString(ConfigConstants.TASK_MANAGER_HOSTNAME_KEY, addressString);
-			conf.setInteger(ConfigConstants.LOCAL_NUMBER_TASK_MANAGER, 2);
-			conf.setInteger(ConfigConstants.TASK_MANAGER_NUM_TASK_SLOTS, 2);
-			conf.setInteger(ConfigConstants.TASK_MANAGER_MEMORY_SIZE_KEY, 16);
-			
-			flink = new ForkableFlinkMiniCluster(conf, false, StreamingMode.BATCH_ONLY);
-			flink.start();
 
-			ExecutionEnvironment env = ExecutionEnvironment.createRemoteEnvironment(addressString, flink.getLeaderRPCPort());
+			ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
 			env.setParallelism(4);
 			env.getConfig().disableSysoutLogging();
-			
+
 			// get input data
 			DataSet<String> text = env.fromElements(WordCountData.TEXT.split("\n"));
 
-			DataSet<Tuple2<String, Integer>> counts =text
+			DataSet<Tuple2<String, Integer>> counts = text
 					.flatMap(new FlatMapFunction<String, Tuple2<String, Integer>>() {
 						@Override
 						public void flatMap(String value, Collector<Tuple2<String, Integer>> out) throws Exception {
@@ -107,14 +113,8 @@ public class IPv6HostnamesITCase extends TestLogger {
 			e.printStackTrace();
 			fail(e.getMessage());
 		}
-		finally {
-			if (flink != null) {
-				flink.shutdown();
-			}
-		}
 	}
-	
-	
+
 	private Inet6Address getLocalIPv6Address() {
 		try {
 			Enumeration<NetworkInterface> e = NetworkInterface.getNetworkInterfaces();
@@ -125,15 +125,14 @@ public class IPv6HostnamesITCase extends TestLogger {
 				Enumeration<InetAddress> ee = netInterface.getInetAddresses();
 				while (ee.hasMoreElements()) {
 					InetAddress addr = ee.nextElement();
-					
-					
+
 					if (addr instanceof Inet6Address && (!addr.isLoopbackAddress()) && (!addr.isAnyLocalAddress())) {
 						// see if it is possible to bind to the address
 						InetSocketAddress socketAddress = new InetSocketAddress(addr, 0);
-						
+
 						try {
 							log.info("Considering address " + addr);
-							
+
 							// test whether we can bind a socket to that address
 							log.info("Testing whether sockets can bind to " + addr);
 							ServerSocket sock = new ServerSocket();
@@ -146,7 +145,7 @@ public class IPv6HostnamesITCase extends TestLogger {
 							ActorSystem as = AkkaUtils.createActorSystem(
 									new Configuration(),
 									new Some<scala.Tuple2<String, Object>>(new scala.Tuple2<String, Object>(addr.getHostAddress(), port)));
-							as.shutdown();
+							as.terminate();
 
 							log.info("Using address " + addr);
 							return (Inet6Address) addr;
@@ -157,7 +156,7 @@ public class IPv6HostnamesITCase extends TestLogger {
 					}
 				}
 			}
-			
+
 			return null;
 		}
 		catch (Exception e) {

@@ -20,6 +20,9 @@ package org.apache.flink.api.common.typeutils.base.array;
 
 import java.io.IOException;
 
+import org.apache.flink.annotation.Internal;
+import org.apache.flink.api.common.typeutils.SimpleTypeSerializerSnapshot;
+import org.apache.flink.api.common.typeutils.TypeSerializerSnapshot;
 import org.apache.flink.api.common.typeutils.base.TypeSerializerSingleton;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
@@ -27,6 +30,7 @@ import org.apache.flink.core.memory.DataOutputView;
 /**
  * A serializer for long arrays.
  */
+@Internal
 public final class LongPrimitiveArraySerializer extends TypeSerializerSingleton<long[]>{
 
 	private static final long serialVersionUID = 1L;
@@ -34,8 +38,7 @@ public final class LongPrimitiveArraySerializer extends TypeSerializerSingleton<
 	private static final long[] EMPTY = new long[0];
 
 	public static final LongPrimitiveArraySerializer INSTANCE = new LongPrimitiveArraySerializer();
-	
-	
+
 	@Override
 	public boolean isImmutableType() {
 		return false;
@@ -102,7 +105,20 @@ public final class LongPrimitiveArraySerializer extends TypeSerializerSingleton<
 	}
 
 	@Override
-	public boolean canEqual(Object obj) {
-		return obj instanceof LongPrimitiveArraySerializer;
+	public TypeSerializerSnapshot<long[]> snapshotConfiguration() {
+		return new LongPrimitiveArraySerializerSnapshot();
+	}
+
+	// ------------------------------------------------------------------------
+
+	/**
+	 * Serializer configuration snapshot for compatibility and format evolution.
+	 */
+	@SuppressWarnings("WeakerAccess")
+	public static final class LongPrimitiveArraySerializerSnapshot extends SimpleTypeSerializerSnapshot<long[]> {
+
+		public LongPrimitiveArraySerializerSnapshot() {
+			super(() -> INSTANCE);
+		}
 	}
 }

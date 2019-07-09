@@ -18,15 +18,17 @@
 
 package org.apache.flink.api.java.operators.translation;
 
-import java.util.Iterator;
-
+import org.apache.flink.annotation.Internal;
 import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.util.TraversableOnceException;
+
+import java.util.Iterator;
 
 /**
  * An iterator that reads 3-tuples (groupKey, sortKey, value) and returns only the values (third field).
  * The iterator also tracks the groupKeys, as the triples flow though it.
  */
+@Internal
 public class Tuple3UnwrappingIterator<T, K1, K2> implements Iterator<T>, Iterable<T>, java.io.Serializable {
 
 	private static final long serialVersionUID = 1L;

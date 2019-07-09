@@ -18,13 +18,8 @@
 
 package org.apache.flink.optimizer.plan;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-
 import org.apache.flink.api.common.operators.Operator;
+import org.apache.flink.api.common.operators.ResourceSpec;
 import org.apache.flink.api.common.operators.util.FieldSet;
 import org.apache.flink.optimizer.CompilerException;
 import org.apache.flink.optimizer.costs.Costs;
@@ -38,6 +33,12 @@ import org.apache.flink.runtime.operators.DriverStrategy;
 import org.apache.flink.runtime.operators.shipping.ShipStrategyType;
 import org.apache.flink.runtime.operators.util.LocalStrategy;
 import org.apache.flink.util.Visitable;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * The representation of a data exchange between to operators. The data exchange can realize a shipping strategy, 
@@ -308,6 +309,14 @@ public abstract class PlanNode implements Visitable<PlanNode>, DumpableNode<Plan
 	public int getParallelism() {
 		return this.parallelism;
 	}
+
+	public ResourceSpec getMinResources() {
+		return this.template.getOperator().getMinResources();
+	}
+
+	public ResourceSpec getPreferredResources() {
+		return this.template.getOperator().getPreferredResources();
+	}
 	
 	public long getGuaranteedAvailableMemory() {
 		return this.template.getMinimalMemoryAcrossAllSubTasks();
@@ -547,7 +556,7 @@ public abstract class PlanNode implements Visitable<PlanNode>, DumpableNode<Plan
 	// --------------------------------------------------------------------------------------------
 	
 	public static enum SourceAndDamReport {
-		NOT_FOUND, FOUND_SOURCE, FOUND_SOURCE_AND_DAM;
+		NOT_FOUND, FOUND_SOURCE, FOUND_SOURCE_AND_DAM
 	}
 	
 	
@@ -568,6 +577,6 @@ public abstract class PlanNode implements Visitable<PlanNode>, DumpableNode<Plan
 		MET,
 		
 		/** Indicates that the question whether the properties are met has been determined false */
-		NOT_MET;
+		NOT_MET
 	}
 }

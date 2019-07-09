@@ -20,12 +20,12 @@ package org.apache.flink.api.common.typeutils.base;
 
 import java.io.IOException;
 
+import org.apache.flink.annotation.Internal;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.MemorySegment;
 import org.apache.flink.types.StringValue;
 
-
-
+@Internal
 public final class StringComparator extends BasicTypeComparator<String> {
 
 	private static final long serialVersionUID = 1L;
@@ -73,7 +73,7 @@ public final class StringComparator extends BasicTypeComparator<String> {
 
 
 	@Override
-	public void putNormalizedKey(String record, MemorySegment target, int offset, int len) {;
+	public void putNormalizedKey(String record, MemorySegment target, int offset, int len) {
 		final int limit = offset + len;
 		final int end = record.length();
 		int pos = 0;

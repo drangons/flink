@@ -18,17 +18,22 @@
 
 package org.apache.flink.configuration;
 
+import org.apache.flink.annotation.Public;
+
+import java.util.Properties;
+
 /**
  * Unmodifiable version of the Configuration class.
  */
+@Public
 public class UnmodifiableConfiguration extends Configuration {
-	
+
 	private static final long serialVersionUID = -8151292629158972280L;
 
 	/**
 	 * Creates a new UnmodifiableConfiguration, which holds a copy of the given configuration
 	 * that cannot be altered.
-	 * 
+	 *
 	 * @param config The configuration with the original contents.
 	 */
 	public UnmodifiableConfiguration(Configuration config) {
@@ -38,6 +43,12 @@ public class UnmodifiableConfiguration extends Configuration {
 	// --------------------------------------------------------------------------------------------
 	//  All mutating methods must fail
 	// --------------------------------------------------------------------------------------------
+
+	@Override
+	public void addAllToProperties(Properties props) {
+		// override to make the UnmodifiableConfigurationTest happy
+		super.addAllToProperties(props);
+	}
 
 	@Override
 	public final void addAll(Configuration other) {
@@ -52,6 +63,12 @@ public class UnmodifiableConfiguration extends Configuration {
 	@Override
 	final <T> void setValueInternal(String key, T value){
 		error();
+	}
+
+	@Override
+	public <T> boolean removeConfig(ConfigOption<T> configOption) {
+		error();
+		return false;
 	}
 
 	private void error(){

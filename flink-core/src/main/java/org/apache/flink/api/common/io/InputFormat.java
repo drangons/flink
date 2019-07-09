@@ -21,6 +21,7 @@ package org.apache.flink.api.common.io;
 import java.io.IOException;
 import java.io.Serializable;
 
+import org.apache.flink.annotation.Public;
 import org.apache.flink.api.common.io.statistics.BaseStatistics;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.io.InputSplit;
@@ -40,7 +41,7 @@ import org.apache.flink.core.io.InputSplitSource;
  * The life cycle of an input format is the following:
  * <ol>
  *   <li>After being instantiated (parameterless), it is configured with a {@link Configuration} object. 
- *       Basic fields are read from the configuration, such as for example a file path, if the format describes
+ *       Basic fields are read from the configuration, such as a file path, if the format describes
  *       files as input.</li>
  *   <li>Optionally: It is called by the compiler to produce basic statistics about the input.</li>
  *   <li>It is called to create the input splits.</li>
@@ -60,6 +61,7 @@ import org.apache.flink.core.io.InputSplitSource;
  * @param <OT> The type of the produced records.
  * @param <T> The type of input split.
  */
+@Public
 public interface InputFormat<OT, T extends InputSplit> extends InputSplitSource<T>, Serializable {
 	
 	/**
@@ -68,7 +70,7 @@ public interface InputFormat<OT, T extends InputSplit> extends InputSplitSource<
 	 * <p>
 	 * This method is always called first on a newly instantiated input format. 
 	 *  
-	 * @param parameters The configuration with all parameters.
+	 * @param parameters The configuration with all parameters (note: not the Flink config but the TaskConfig).
 	 */
 	void configure(Configuration parameters);
 	

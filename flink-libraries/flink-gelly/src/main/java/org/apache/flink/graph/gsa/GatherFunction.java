@@ -27,10 +27,10 @@ import java.util.Collection;
 
 /**
  * The base class for the first step of a {@link GatherSumApplyIteration}.
- * 
+ *
  * @param <VV> the vertex value type
  * @param <EV> the edge value type
- * @param <M> the output type 
+ * @param <M> the output type
  */
 @SuppressWarnings("serial")
 public abstract class GatherFunction<VV, EV, M> implements Serializable {
@@ -57,11 +57,11 @@ public abstract class GatherFunction<VV, EV, M> implements Serializable {
 	//---------------------------------------------------------------------------------------------
 
 	/**
-	 * This method is invoked once per superstep, for each {@link Neighbor} of each Vertex 
+	 * This method is invoked once per superstep, for each {@link Neighbor} of each Vertex
 	 * in the beginning of each superstep in a {@link GatherSumApplyIteration}.
 	 * It needs to produce a partial value, which will be combined with other partial value
 	 * in the next phase of the iteration.
-	 *  
+	 *
 	 * @param neighbor the input Neighbor. It provides access to the source Vertex and the Edge objects.
 	 * @return a partial result to be combined in the Sum phase.
 	 */
@@ -94,7 +94,7 @@ public abstract class GatherFunction<VV, EV, M> implements Serializable {
 	 * @return The aggregator registered under this name, or null, if no aggregator was registered.
 	 */
 	public <T extends Aggregator<?>> T getIterationAggregator(String name) {
-		return this.runtimeContext.<T>getIterationAggregator(name);
+		return this.runtimeContext.getIterationAggregator(name);
 	}
 
 	/**
@@ -104,7 +104,7 @@ public abstract class GatherFunction<VV, EV, M> implements Serializable {
 	 * @return The aggregated value of the previous iteration.
 	 */
 	public <T extends Value> T getPreviousIterationAggregate(String name) {
-		return this.runtimeContext.<T>getPreviousIterationAggregate(name);
+		return this.runtimeContext.getPreviousIterationAggregate(name);
 	}
 
 	/**
@@ -115,7 +115,7 @@ public abstract class GatherFunction<VV, EV, M> implements Serializable {
 	 * @return The broadcast data set.
 	 */
 	public <T> Collection<T> getBroadcastSet(String name) {
-		return this.runtimeContext.<T>getBroadcastVariable(name);
+		return this.runtimeContext.getBroadcastVariable(name);
 	}
 
 	// --------------------------------------------------------------------------------------------

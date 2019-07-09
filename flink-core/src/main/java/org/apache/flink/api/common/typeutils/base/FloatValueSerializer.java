@@ -20,18 +20,20 @@ package org.apache.flink.api.common.typeutils.base;
 
 import java.io.IOException;
 
+import org.apache.flink.annotation.Internal;
+import org.apache.flink.api.common.typeutils.SimpleTypeSerializerSnapshot;
+import org.apache.flink.api.common.typeutils.TypeSerializerSnapshot;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
 import org.apache.flink.types.FloatValue;
 
-
+@Internal
 public class FloatValueSerializer extends TypeSerializerSingleton<FloatValue> {
 
 	private static final long serialVersionUID = 1L;
 	
 	public static final FloatValueSerializer INSTANCE = new FloatValueSerializer();
-	
-	
+
 	@Override
 	public boolean isImmutableType() {
 		return false;
@@ -80,7 +82,20 @@ public class FloatValueSerializer extends TypeSerializerSingleton<FloatValue> {
 	}
 
 	@Override
-	public boolean canEqual(Object obj) {
-		return obj instanceof FloatValueSerializer;
+	public TypeSerializerSnapshot<FloatValue> snapshotConfiguration() {
+		return new FloatValueSerializerSnapshot();
+	}
+
+	// ------------------------------------------------------------------------
+
+	/**
+	 * Serializer configuration snapshot for compatibility and format evolution.
+	 */
+	@SuppressWarnings("WeakerAccess")
+	public static final class FloatValueSerializerSnapshot extends SimpleTypeSerializerSnapshot<FloatValue> {
+
+		public FloatValueSerializerSnapshot() {
+			super(() -> INSTANCE);
+		}
 	}
 }

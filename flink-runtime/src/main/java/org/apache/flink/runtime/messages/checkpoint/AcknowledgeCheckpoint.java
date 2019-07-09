@@ -18,58 +18,90 @@
 
 package org.apache.flink.runtime.messages.checkpoint;
 
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.JobID;
+import org.apache.flink.runtime.checkpoint.CheckpointMetrics;
+import org.apache.flink.runtime.checkpoint.TaskStateSnapshot;
 import org.apache.flink.runtime.executiongraph.ExecutionAttemptID;
-import org.apache.flink.runtime.state.StateHandle;
-import org.apache.flink.util.SerializedValue;
 
 /**
- * This message is sent from the {@link org.apache.flink.runtime.taskmanager.TaskManager} to the
- * {@link org.apache.flink.runtime.jobmanager.JobManager} to signal that the checkpoint of an
+ * This message is sent from the {@link org.apache.flink.runtime.taskexecutor.TaskExecutor} to the
+ * {@link org.apache.flink.runtime.jobmaster.JobMaster} to signal that the checkpoint of an
  * individual task is completed.
- * 
- * This message may carry the handle to the task's state.
+ *
+ * <p>This message may carry the handle to the task's chained operator state and the key group
+ * state.
  */
-public class AcknowledgeCheckpoint extends AbstractCheckpointMessage implements java.io.Serializable {
+public class AcknowledgeCheckpoint extends AbstractCheckpointMessage {
 
 	private static final long serialVersionUID = -7606214777192401493L;
-	
-	private final SerializedValue<StateHandle<?>> state;
 
-	public AcknowledgeCheckpoint(JobID job, ExecutionAttemptID taskExecutionId, long checkpointId) {
-		this(job, taskExecutionId, checkpointId, null);
-	}
+	private final TaskStateSnapshot subtaskState;
 
-	public AcknowledgeCheckpoint(JobID job, ExecutionAttemptID taskExecutionId, long checkpointId,
-									SerializedValue<StateHandle<?>> state) {
+	private final CheckpointMetrics checkpointMetrics;
+
+	// ------------------------------------------------------------------------
+
+	public AcknowledgeCheckpoint(
+			JobID job,
+			ExecutionAttemptID taskExecutionId,
+			long checkpointId,
+			CheckpointMetrics checkpointMetrics,
+			TaskStateSnapshot subtaskState) {
+
 		super(job, taskExecutionId, checkpointId);
-		this.state = state;
+
+		this.subtaskState = subtaskState;
+		this.checkpointMetrics = checkpointMetrics;
 	}
 
-	public SerializedValue<StateHandle<?>> getState() {
-		return state;
+	@VisibleForTesting
+	public AcknowledgeCheckpoint(JobID jobId, ExecutionAttemptID taskExecutionId, long checkpointId) {
+		this(jobId, taskExecutionId, checkpointId, new CheckpointMetrics(), null);
+	}
+
+	// ------------------------------------------------------------------------
+	//  properties
+	// ------------------------------------------------------------------------
+
+	public TaskStateSnapshot getSubtaskState() {
+		return subtaskState;
+	}
+
+	public CheckpointMetrics getCheckpointMetrics() {
+		return checkpointMetrics;
 	}
 
 	// --------------------------------------------------------------------------------------------
-	
+
 	@Override
 	public boolean equals(Object o) {
 		if (this == o) {
-			return true ;
+			return true;
 		}
-		else if (o instanceof AcknowledgeCheckpoint) {
-			AcknowledgeCheckpoint that = (AcknowledgeCheckpoint) o;
-			return super.equals(o) && (this.state == null ? that.state == null :
-					(that.state != null && this.state.equals(that.state)));
-		}
-		else {
+		if (!(o instanceof AcknowledgeCheckpoint)) {
 			return false;
 		}
+		if (!super.equals(o)) {
+			return false;
+		}
+
+		AcknowledgeCheckpoint that = (AcknowledgeCheckpoint) o;
+		return subtaskState != null ?
+				subtaskState.equals(that.subtaskState) : that.subtaskState == null;
+
+	}
+
+	@Override
+	public int hashCode() {
+		int result = super.hashCode();
+		result = 31 * result + (subtaskState != null ? subtaskState.hashCode() : 0);
+		return result;
 	}
 
 	@Override
 	public String toString() {
 		return String.format("Confirm Task Checkpoint %d for (%s/%s) - state=%s",
-				getCheckpointId(), getJob(), getTaskExecutionId(), state);
+				getCheckpointId(), getJob(), getTaskExecutionId(), subtaskState);
 	}
 }

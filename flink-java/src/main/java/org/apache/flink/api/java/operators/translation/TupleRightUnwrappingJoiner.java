@@ -18,10 +18,20 @@
 
 package org.apache.flink.api.java.operators.translation;
 
+import org.apache.flink.annotation.Internal;
 import org.apache.flink.api.common.functions.FlatJoinFunction;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.util.Collector;
 
+/**
+ * Joiner that unwraps values from the right set before applying the join operation.
+ *
+ * @param <I1>  type of values in the left set
+ * @param <I2>  type of values in the right set
+ * @param <OUT> type of resulting values
+ * @param <K>   type of key
+ */
+@Internal
 public final class TupleRightUnwrappingJoiner<I1, I2, OUT, K>
 		extends WrappingFunction<FlatJoinFunction<I1, I2, OUT>>
 		implements FlatJoinFunction<I1, Tuple2<K, I2>, OUT> {

@@ -15,17 +15,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.client.cli;
 
+import org.apache.flink.configuration.CheckpointingOptions;
+import org.apache.flink.runtime.jobgraph.SavepointRestoreSettings;
+
 import org.apache.commons.cli.CommandLine;
+import org.apache.commons.cli.DefaultParser;
 import org.apache.commons.cli.HelpFormatter;
 import org.apache.commons.cli.Option;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
-import org.apache.commons.cli.PosixParser;
 
-import org.apache.flink.client.CliFrontend;
-import org.apache.flink.client.FlinkYarnSessionCli;
+import javax.annotation.Nullable;
+
+import java.util.Collection;
 
 /**
  * A simple command line parser (based on Apache Commons CLI) that extracts command
@@ -33,19 +38,14 @@ import org.apache.flink.client.FlinkYarnSessionCli;
  */
 public class CliFrontendParser {
 
-	/** command line interface of the YARN session, with a special initialization here
-	 *  to prefix all options with y/yarn. */
-	private static final FlinkYarnSessionCli yarnSessionCLi = new FlinkYarnSessionCli("y", "yarn");
-
-
 	static final Option HELP_OPTION = new Option("h", "help", false,
-												"Show the help message for the CLI Frontend or the action.");
+			"Show the help message for the CLI Frontend or the action.");
 
 	static final Option JAR_OPTION = new Option("j", "jarfile", true, "Flink program JAR file.");
 
-	public static final Option CLASS_OPTION = new Option("c", "class", true,
-			"Class with the program entry point (\"main\" method or \"getPlan()\" method. Only needed if the " +
-					"JAR file does not specify the class in its manifest.");
+	static final Option CLASS_OPTION = new Option("c", "class", true,
+			"Class with the program entry point (\"main()\" method or \"getPlan()\" method). Only needed if the " +
+			"JAR file does not specify the class in its manifest.");
 
 	static final Option CLASSPATH_OPTION = new Option("C", "classpath", true, "Adds a URL to each user code " +
 			"classloader  on all nodes in the cluster. The paths must specify a protocol (e.g. file://) and be " +
@@ -53,23 +53,45 @@ public class CliFrontendParser {
 					"times for specifying more than one URL. The protocol must be supported by the " +
 					"{@link java.net.URLClassLoader}.");
 
-	static final Option PARALLELISM_OPTION = new Option("p", "parallelism", true,
+	public static final Option PARALLELISM_OPTION = new Option("p", "parallelism", true,
 			"The parallelism with which to run the program. Optional flag to override the default value " +
-					"specified in the configuration.");
+			"specified in the configuration.");
 
 	static final Option LOGGING_OPTION = new Option("q", "sysoutLogging", false, "If present, " +
-			"supress logging output to standard out.");
+			"suppress logging output to standard out.");
 
-	static final Option DETACHED_OPTION = new Option("d", "detached", false, "If present, runs " +
+	public static final Option DETACHED_OPTION = new Option("d", "detached", false, "If present, runs " +
 			"the job in detached mode");
+
+	public static final Option SHUTDOWN_IF_ATTACHED_OPTION = new Option(
+		"sae", "shutdownOnAttachedExit", false,
+		"If the job is submitted in attached mode, perform a best-effort cluster shutdown " +
+			"when the CLI is terminated abruptly, e.g., in response to a user interrupt, such as typing Ctrl + C.");
+
+	/**
+	 * @deprecated use non-prefixed variant {@link #DETACHED_OPTION} for both YARN and non-YARN deployments
+	 */
+	@Deprecated
+	public static final Option YARN_DETACHED_OPTION = new Option("yd", "yarndetached", false, "If present, runs " +
+		"the job in detached mode (deprecated; use non-YARN specific option instead)");
 
 	static final Option ARGS_OPTION = new Option("a", "arguments", true,
 			"Program arguments. Arguments can also be added without -a, simply as trailing parameters.");
 
-	static final Option ADDRESS_OPTION = new Option("m", "jobmanager", true,
-			"Address of the JobManager (master) to which to connect. Specify '" + CliFrontend.YARN_DEPLOY_JOBMANAGER
-					+ "' as the JobManager to deploy a YARN cluster for the job. Use this flag to connect to a " +
-					"different JobManager than the one specified in the configuration.");
+	public static final Option ADDRESS_OPTION = new Option("m", "jobmanager", true,
+			"Address of the JobManager (master) to which to connect. " +
+			"Use this flag to connect to a different JobManager than the one specified in the configuration.");
+
+	public static final Option SAVEPOINT_PATH_OPTION = new Option("s", "fromSavepoint", true,
+			"Path to a savepoint to restore the job from (for example hdfs:///flink/savepoint-1537).");
+
+	public static final Option SAVEPOINT_ALLOW_NON_RESTORED_OPTION = new Option("n", "allowNonRestoredState", false,
+			"Allow to skip savepoint state that cannot be restored. " +
+					"You need to allow this if you removed an operator from your " +
+					"program that was part of the program when the savepoint was triggered.");
+
+	static final Option SAVEPOINT_DISPOSE_OPTION = new Option("d", "dispose", true,
+			"Path of savepoint to dispose.");
 
 	// list specific options
 	static final Option RUNNING_OPTION = new Option("r", "running", false,
@@ -77,6 +99,38 @@ public class CliFrontendParser {
 
 	static final Option SCHEDULED_OPTION = new Option("s", "scheduled", false,
 			"Show only scheduled programs and their JobIDs");
+
+	static final Option ALL_OPTION = new Option("a", "all", false,
+		"Show all programs and their JobIDs");
+
+	static final Option ZOOKEEPER_NAMESPACE_OPTION = new Option("z", "zookeeperNamespace", true,
+			"Namespace to create the Zookeeper sub-paths for high availability mode");
+
+	static final Option CANCEL_WITH_SAVEPOINT_OPTION = new Option(
+			"s", "withSavepoint", true, "Trigger savepoint and cancel job. The target " +
+			"directory is optional. If no directory is specified, the configured default " +
+			"directory (" + CheckpointingOptions.SAVEPOINT_DIRECTORY.key() + ") is used.");
+
+	public static final Option STOP_WITH_SAVEPOINT = new Option("s", "withSavepoint", true,
+			"Path to the savepoint (for example hdfs:///flink/savepoint-1537). " +
+					"If no directory is specified, the configured default will be used (\"" + CheckpointingOptions.SAVEPOINT_DIRECTORY.key() + "\").");
+
+	public static final Option STOP_AND_DRAIN = new Option("d", "drain", false,
+			"Send MAX_WATERMARK before taking the savepoint and stopping the pipelne.");
+
+	static final Option PY_OPTION = new Option("py", "python", true,
+		"Python script with the program entry point. " +
+			"The dependent resources can be configured with the `--pyFiles` option.");
+
+	static final Option PYFILES_OPTION = new Option("pyfs", "pyFiles", true,
+		"Attach custom python files for job. " +
+			"Comma can be used as the separator to specify multiple files. " +
+			"The standard python resource file suffixes such as .py/.egg/.zip are all supported." +
+			"(eg: --pyFiles file:///tmp/myresource.zip,hdfs:///$namenode_address/myresource2.zip)");
+
+	static final Option PYMODULE_OPTION = new Option("pym", "pyModule", true,
+		"Python module with the program entry point. " +
+			"This option must be used in conjunction with `--pyFiles`.");
 
 	static {
 		HELP_OPTION.setRequired(false);
@@ -98,6 +152,8 @@ public class CliFrontendParser {
 
 		LOGGING_OPTION.setRequired(false);
 		DETACHED_OPTION.setRequired(false);
+		SHUTDOWN_IF_ATTACHED_OPTION.setRequired(false);
+		YARN_DETACHED_OPTION.setRequired(false);
 
 		ARGS_OPTION.setRequired(false);
 		ARGS_OPTION.setArgName("programArgs");
@@ -105,13 +161,36 @@ public class CliFrontendParser {
 
 		RUNNING_OPTION.setRequired(false);
 		SCHEDULED_OPTION.setRequired(false);
+
+		SAVEPOINT_PATH_OPTION.setRequired(false);
+		SAVEPOINT_PATH_OPTION.setArgName("savepointPath");
+
+		SAVEPOINT_ALLOW_NON_RESTORED_OPTION.setRequired(false);
+
+		ZOOKEEPER_NAMESPACE_OPTION.setRequired(false);
+		ZOOKEEPER_NAMESPACE_OPTION.setArgName("zookeeperNamespace");
+
+		CANCEL_WITH_SAVEPOINT_OPTION.setRequired(false);
+		CANCEL_WITH_SAVEPOINT_OPTION.setArgName("targetDirectory");
+		CANCEL_WITH_SAVEPOINT_OPTION.setOptionalArg(true);
+
+		STOP_WITH_SAVEPOINT.setRequired(false);
+		STOP_WITH_SAVEPOINT.setArgName("withSavepoint");
+		STOP_WITH_SAVEPOINT.setOptionalArg(true);
+
+		STOP_AND_DRAIN.setRequired(false);
+
+		PY_OPTION.setRequired(false);
+		PY_OPTION.setArgName("python");
+
+		PYFILES_OPTION.setRequired(false);
+		PYFILES_OPTION.setArgName("pyFiles");
+
+		PYMODULE_OPTION.setRequired(false);
+		PYMODULE_OPTION.setArgName("pyModule");
 	}
 
-	private static final Options RUN_OPTIONS = getRunOptions(buildGeneralOptions(new Options()));
-	private static final Options INFO_OPTIONS = getInfoOptions(buildGeneralOptions(new Options()));
-	private static final Options LIST_OPTIONS = getListOptions(buildGeneralOptions(new Options()));
-	private static final Options CANCEL_OPTIONS = getCancelOptions(buildGeneralOptions(new Options()));
-
+	private static final Options RUN_OPTIONS = getRunCommandOptions();
 
 	private static Options buildGeneralOptions(Options options) {
 		options.addOption(HELP_OPTION);
@@ -120,7 +199,7 @@ public class CliFrontendParser {
 		return options;
 	}
 
-	public static Options getProgramSpecificOptions(Options options) {
+	private static Options getProgramSpecificOptions(Options options) {
 		options.addOption(JAR_OPTION);
 		options.addOption(CLASS_OPTION);
 		options.addOption(CLASSPATH_OPTION);
@@ -128,9 +207,11 @@ public class CliFrontendParser {
 		options.addOption(ARGS_OPTION);
 		options.addOption(LOGGING_OPTION);
 		options.addOption(DETACHED_OPTION);
-
-		// also add the YARN options so that the parser can parse them
-		yarnSessionCLi.getYARNSessionCLIOptions(options);
+		options.addOption(SHUTDOWN_IF_ATTACHED_OPTION);
+		options.addOption(YARN_DETACHED_OPTION);
+		options.addOption(PY_OPTION);
+		options.addOption(PYFILES_OPTION);
+		options.addOption(PYMODULE_OPTION);
 		return options;
 	}
 
@@ -140,70 +221,105 @@ public class CliFrontendParser {
 		options.addOption(PARALLELISM_OPTION);
 		options.addOption(LOGGING_OPTION);
 		options.addOption(DETACHED_OPTION);
+		options.addOption(SHUTDOWN_IF_ATTACHED_OPTION);
+		options.addOption(PY_OPTION);
+		options.addOption(PYFILES_OPTION);
+		options.addOption(PYMODULE_OPTION);
 		return options;
 	}
 
-	private static Options getRunOptions(Options options) {
-		Options o = getProgramSpecificOptions(options);
-		return getJobManagerAddressOption(o);
-	}
-
-	private static Options getRunOptionsWithoutDeprecatedOptions(Options options) {
-		Options o = getProgramSpecificOptionsWithoutDeprecatedOptions(options);
-		return getJobManagerAddressOption(o);
-	}
-
-	private static Options getJobManagerAddressOption(Options options) {
-		options.addOption(ADDRESS_OPTION);
-		return options;
-	}
-
-	private static Options getInfoOptions(Options options) {
+	public static Options getRunCommandOptions() {
+		Options options = buildGeneralOptions(new Options());
 		options = getProgramSpecificOptions(options);
-		options = getJobManagerAddressOption(options);
-		return options;
+		options.addOption(SAVEPOINT_PATH_OPTION);
+		return options.addOption(SAVEPOINT_ALLOW_NON_RESTORED_OPTION);
 	}
 
-	private static Options getInfoOptionsWithoutDeprecatedOptions(Options options) {
-		options.addOption(CLASS_OPTION);
-		options.addOption(PARALLELISM_OPTION);
-		options = getJobManagerAddressOption(options);
-		return options;
+	static Options getInfoCommandOptions() {
+		Options options = buildGeneralOptions(new Options());
+		return getProgramSpecificOptions(options);
 	}
 
-	private static Options getListOptions(Options options) {
+	static Options getListCommandOptions() {
+		Options options = buildGeneralOptions(new Options());
+		options.addOption(ALL_OPTION);
 		options.addOption(RUNNING_OPTION);
-		options.addOption(SCHEDULED_OPTION);
-		options = getJobManagerAddressOption(options);
-		return options;
+		return options.addOption(SCHEDULED_OPTION);
 	}
 
-	private static Options getCancelOptions(Options options) {
-		options = getJobManagerAddressOption(options);
-		return options;
+	static Options getCancelCommandOptions() {
+		Options options = buildGeneralOptions(new Options());
+		return options.addOption(CANCEL_WITH_SAVEPOINT_OPTION);
+	}
+
+	static Options getStopCommandOptions() {
+		return buildGeneralOptions(new Options())
+				.addOption(STOP_WITH_SAVEPOINT)
+				.addOption(STOP_AND_DRAIN);
+	}
+
+	static Options getSavepointCommandOptions() {
+		Options options = buildGeneralOptions(new Options());
+		options.addOption(SAVEPOINT_DISPOSE_OPTION);
+		return options.addOption(JAR_OPTION);
 	}
 
 	// --------------------------------------------------------------------------------------------
 	//  Help
 	// --------------------------------------------------------------------------------------------
 
+	private static Options getRunOptionsWithoutDeprecatedOptions(Options options) {
+		Options o = getProgramSpecificOptionsWithoutDeprecatedOptions(options);
+		o.addOption(SAVEPOINT_PATH_OPTION);
+		return o.addOption(SAVEPOINT_ALLOW_NON_RESTORED_OPTION);
+	}
+
+	private static Options getInfoOptionsWithoutDeprecatedOptions(Options options) {
+		options.addOption(CLASS_OPTION);
+		options.addOption(PARALLELISM_OPTION);
+		return options;
+	}
+
+	private static Options getListOptionsWithoutDeprecatedOptions(Options options) {
+		options.addOption(RUNNING_OPTION);
+		return options.addOption(SCHEDULED_OPTION);
+	}
+
+	private static Options getCancelOptionsWithoutDeprecatedOptions(Options options) {
+		return options.addOption(CANCEL_WITH_SAVEPOINT_OPTION);
+	}
+
+	private static Options getStopOptionsWithoutDeprecatedOptions(Options options) {
+		return options
+				.addOption(STOP_WITH_SAVEPOINT)
+				.addOption(STOP_AND_DRAIN);
+	}
+
+	private static Options getSavepointOptionsWithoutDeprecatedOptions(Options options) {
+		options.addOption(SAVEPOINT_DISPOSE_OPTION);
+		options.addOption(JAR_OPTION);
+		return options;
+	}
+
 	/**
 	 * Prints the help for the client.
 	 */
-	public static void printHelp() {
+	public static void printHelp(Collection<CustomCommandLine<?>> customCommandLines) {
 		System.out.println("./flink <ACTION> [OPTIONS] [ARGUMENTS]");
 		System.out.println();
 		System.out.println("The following actions are available:");
 
-		printHelpForRun();
+		printHelpForRun(customCommandLines);
 		printHelpForInfo();
-		printHelpForList();
-		printHelpForCancel();
+		printHelpForList(customCommandLines);
+		printHelpForStop(customCommandLines);
+		printHelpForCancel(customCommandLines);
+		printHelpForSavepoint(customCommandLines);
 
 		System.out.println();
 	}
 
-	public static void printHelpForRun() {
+	public static void printHelpForRun(Collection<CustomCommandLine<?>> customCommandLines) {
 		HelpFormatter formatter = new HelpFormatter();
 		formatter.setLeftPadding(5);
 		formatter.setWidth(80);
@@ -212,10 +328,9 @@ public class CliFrontendParser {
 		System.out.println("\n  Syntax: run [OPTIONS] <jar-file> <arguments>");
 		formatter.setSyntaxPrefix("  \"run\" action options:");
 		formatter.printHelp(" ", getRunOptionsWithoutDeprecatedOptions(new Options()));
-		formatter.setSyntaxPrefix("  Additional arguments if -m " + CliFrontend.YARN_DEPLOY_JOBMANAGER + " is set:");
-		Options yarnOpts = new Options();
-		yarnSessionCLi.getYARNSessionCLIOptions(yarnOpts);
-		formatter.printHelp(" ", yarnOpts);
+
+		printCustomCliOptions(customCommandLines, formatter, true);
+
 		System.out.println();
 	}
 
@@ -228,10 +343,11 @@ public class CliFrontendParser {
 		System.out.println("\n  Syntax: info [OPTIONS] <jar-file> <arguments>");
 		formatter.setSyntaxPrefix("  \"info\" action options:");
 		formatter.printHelp(" ", getInfoOptionsWithoutDeprecatedOptions(new Options()));
+
 		System.out.println();
 	}
 
-	public static void printHelpForList() {
+	public static void printHelpForList(Collection<CustomCommandLine<?>> customCommandLines) {
 		HelpFormatter formatter = new HelpFormatter();
 		formatter.setLeftPadding(5);
 		formatter.setWidth(80);
@@ -239,11 +355,29 @@ public class CliFrontendParser {
 		System.out.println("\nAction \"list\" lists running and scheduled programs.");
 		System.out.println("\n  Syntax: list [OPTIONS]");
 		formatter.setSyntaxPrefix("  \"list\" action options:");
-		formatter.printHelp(" ", getListOptions(new Options()));
+		formatter.printHelp(" ", getListOptionsWithoutDeprecatedOptions(new Options()));
+
+		printCustomCliOptions(customCommandLines, formatter, false);
+
 		System.out.println();
 	}
 
-	public static void printHelpForCancel() {
+	public static void printHelpForStop(Collection<CustomCommandLine<?>> customCommandLines) {
+		HelpFormatter formatter = new HelpFormatter();
+		formatter.setLeftPadding(5);
+		formatter.setWidth(80);
+
+		System.out.println("\nAction \"stop\" stops a running program with a savepoint (streaming jobs only).");
+		System.out.println("\n  Syntax: stop [OPTIONS] <Job ID>");
+		formatter.setSyntaxPrefix("  \"stop\" action options:");
+		formatter.printHelp(" ", getStopOptionsWithoutDeprecatedOptions(new Options()));
+
+		printCustomCliOptions(customCommandLines, formatter, false);
+
+		System.out.println();
+	}
+
+	public static void printHelpForCancel(Collection<CustomCommandLine<?>> customCommandLines) {
 		HelpFormatter formatter = new HelpFormatter();
 		formatter.setLeftPadding(5);
 		formatter.setWidth(80);
@@ -251,8 +385,58 @@ public class CliFrontendParser {
 		System.out.println("\nAction \"cancel\" cancels a running program.");
 		System.out.println("\n  Syntax: cancel [OPTIONS] <Job ID>");
 		formatter.setSyntaxPrefix("  \"cancel\" action options:");
-		formatter.printHelp(" ", getCancelOptions(new Options()));
+		formatter.printHelp(" ", getCancelOptionsWithoutDeprecatedOptions(new Options()));
+
+		printCustomCliOptions(customCommandLines, formatter, false);
+
 		System.out.println();
+	}
+
+	public static void printHelpForSavepoint(Collection<CustomCommandLine<?>> customCommandLines) {
+		HelpFormatter formatter = new HelpFormatter();
+		formatter.setLeftPadding(5);
+		formatter.setWidth(80);
+
+		System.out.println("\nAction \"savepoint\" triggers savepoints for a running job or disposes existing ones.");
+		System.out.println("\n  Syntax: savepoint [OPTIONS] <Job ID> [<target directory>]");
+		formatter.setSyntaxPrefix("  \"savepoint\" action options:");
+		formatter.printHelp(" ", getSavepointOptionsWithoutDeprecatedOptions(new Options()));
+
+		printCustomCliOptions(customCommandLines, formatter, false);
+
+		System.out.println();
+	}
+
+	/**
+	 * Prints custom cli options.
+	 * @param formatter The formatter to use for printing
+	 * @param runOptions True if the run options should be printed, False to print only general options
+	 */
+	private static void printCustomCliOptions(
+			Collection<CustomCommandLine<?>> customCommandLines,
+			HelpFormatter formatter,
+			boolean runOptions) {
+		// prints options from all available command-line classes
+		for (CustomCommandLine cli: customCommandLines) {
+			formatter.setSyntaxPrefix("  Options for " + cli.getId() + " mode:");
+			Options customOpts = new Options();
+			cli.addGeneralOptions(customOpts);
+			if (runOptions) {
+				cli.addRunOptions(customOpts);
+			}
+			formatter.printHelp(" ", customOpts);
+			System.out.println();
+		}
+	}
+
+	public static SavepointRestoreSettings createSavepointRestoreSettings(CommandLine commandLine) {
+		if (commandLine.hasOption(SAVEPOINT_PATH_OPTION.getOpt())) {
+			String savepointPath = commandLine.getOptionValue(SAVEPOINT_PATH_OPTION.getOpt());
+			boolean allowNonRestoredState = commandLine.hasOption(SAVEPOINT_ALLOW_NON_RESTORED_OPTION.getOpt());
+			return SavepointRestoreSettings.forPath(savepointPath, allowNonRestoredState);
+		} else {
+			return SavepointRestoreSettings.none();
+		}
 	}
 
 	// --------------------------------------------------------------------------------------------
@@ -261,7 +445,7 @@ public class CliFrontendParser {
 
 	public static RunOptions parseRunCommand(String[] args) throws CliArgsException {
 		try {
-			PosixParser parser = new PosixParser();
+			DefaultParser parser = new DefaultParser();
 			CommandLine line = parser.parse(RUN_OPTIONS, args, true);
 			return new RunOptions(line);
 		}
@@ -270,40 +454,37 @@ public class CliFrontendParser {
 		}
 	}
 
-	public static ListOptions parseListCommand(String[] args) throws CliArgsException {
+	public static CommandLine parse(Options options, String[] args, boolean stopAtNonOptions) throws CliArgsException {
+		final DefaultParser parser = new DefaultParser();
+
 		try {
-			PosixParser parser = new PosixParser();
-			CommandLine line = parser.parse(LIST_OPTIONS, args, false);
-			return new ListOptions(line);
-		}
-		catch (ParseException e) {
+			return parser.parse(options, args, stopAtNonOptions);
+		} catch (ParseException e) {
 			throw new CliArgsException(e.getMessage());
 		}
 	}
 
-	public static CancelOptions parseCancelCommand(String[] args) throws CliArgsException {
-		try {
-			PosixParser parser = new PosixParser();
-			CommandLine line = parser.parse(CANCEL_OPTIONS, args, false);
-			return new CancelOptions(line);
+	/**
+	 * Merges the given {@link Options} into a new Options object.
+	 *
+	 * @param optionsA options to merge, can be null if none
+	 * @param optionsB options to merge, can be null if none
+	 * @return
+	 */
+	public static Options mergeOptions(@Nullable Options optionsA, @Nullable Options optionsB) {
+		final Options resultOptions = new Options();
+		if (optionsA != null) {
+			for (Option option : optionsA.getOptions()) {
+				resultOptions.addOption(option);
+			}
 		}
-		catch (ParseException e) {
-			throw new CliArgsException(e.getMessage());
-		}
-	}
 
-	public static InfoOptions parseInfoCommand(String[] args) throws CliArgsException {
-		try {
-			PosixParser parser = new PosixParser();
-			CommandLine line = parser.parse(INFO_OPTIONS, args, false);
-			return new InfoOptions(line);
+		if (optionsB != null) {
+			for (Option option : optionsB.getOptions()) {
+				resultOptions.addOption(option);
+			}
 		}
-		catch (ParseException e) {
-			throw new CliArgsException(e.getMessage());
-		}
-	}
 
-	public static FlinkYarnSessionCli getFlinkYarnSessionCli() {
-		return yarnSessionCLi;
+		return resultOptions;
 	}
 }

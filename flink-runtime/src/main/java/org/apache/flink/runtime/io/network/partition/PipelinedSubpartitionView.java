@@ -18,12 +18,13 @@
 
 package org.apache.flink.runtime.io.network.partition;
 
-import org.apache.flink.runtime.io.network.buffer.Buffer;
-import org.apache.flink.runtime.util.event.NotificationListener;
+import org.apache.flink.runtime.io.network.partition.ResultSubpartition.BufferAndBacklog;
+
+import javax.annotation.Nullable;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static org.apache.flink.util.Preconditions.checkNotNull;
 
 /**
  * View over a pipelined in-memory only subpartition.
@@ -33,23 +34,26 @@ class PipelinedSubpartitionView implements ResultSubpartitionView {
 	/** The subpartition this view belongs to. */
 	private final PipelinedSubpartition parent;
 
+	private final BufferAvailabilityListener availabilityListener;
+
 	/** Flag indicating whether this view has been released. */
-	private AtomicBoolean isReleased = new AtomicBoolean();
+	private final AtomicBoolean isReleased;
 
-	PipelinedSubpartitionView(PipelinedSubpartition parent) {
+	PipelinedSubpartitionView(PipelinedSubpartition parent, BufferAvailabilityListener listener) {
 		this.parent = checkNotNull(parent);
+		this.availabilityListener = checkNotNull(listener);
+		this.isReleased = new AtomicBoolean();
+	}
+
+	@Nullable
+	@Override
+	public BufferAndBacklog getNextBuffer() {
+		return parent.pollBuffer();
 	}
 
 	@Override
-	public Buffer getNextBuffer() {
-		synchronized (parent.buffers) {
-			return parent.buffers.poll();
-		}
-	}
-
-	@Override
-	public boolean registerListener(NotificationListener listener) {
-		return !isReleased.get() && parent.registerListener(listener);
+	public void notifyDataAvailable() {
+		availabilityListener.notifyDataAvailable();
 	}
 
 	@Override
@@ -68,11 +72,28 @@ class PipelinedSubpartitionView implements ResultSubpartitionView {
 
 	@Override
 	public boolean isReleased() {
-		return isReleased.get();
+		return isReleased.get() || parent.isReleased();
+	}
+
+	@Override
+	public boolean nextBufferIsEvent() {
+		return parent.nextBufferIsEvent();
+	}
+
+	@Override
+	public boolean isAvailable() {
+		return parent.isAvailable();
 	}
 
 	@Override
 	public Throwable getFailureCause() {
 		return parent.getFailureCause();
+	}
+
+	@Override
+	public String toString() {
+		return String.format("PipelinedSubpartitionView(index: %d) of ResultPartition %s",
+				parent.index,
+				parent.parent.getPartitionId());
 	}
 }

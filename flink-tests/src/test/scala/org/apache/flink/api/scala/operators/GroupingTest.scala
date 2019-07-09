@@ -66,16 +66,16 @@ class GroupingTest {
     customDs.groupBy(0)
   }
 
-  @Test(expected = classOf[IllegalArgumentException])
+  @Test(expected = classOf[IndexOutOfBoundsException])
   def testGroupByKeyIndices4(): Unit = {
     val env = ExecutionEnvironment.getExecutionEnvironment
     val tupleDs = env.fromCollection(emptyTupleData)
 
-    // should not work, fiels position out of range
+    // should not work, field position out of range
     tupleDs.groupBy(5)
   }
 
-  @Test(expected = classOf[IllegalArgumentException])
+  @Test(expected = classOf[IndexOutOfBoundsException])
   def testGroupByKeyIndices5(): Unit = {
     val env = ExecutionEnvironment.getExecutionEnvironment
     val tupleDs = env.fromCollection(emptyTupleData)
@@ -199,7 +199,7 @@ class GroupingTest {
     }
   }
 
-  @Test(expected = classOf[IllegalArgumentException])
+  @Test(expected = classOf[IndexOutOfBoundsException])
   def testGroupSortKeyFields2(): Unit = {
     val env = ExecutionEnvironment.getExecutionEnvironment
     val tupleDs = env.fromCollection(emptyTupleData)

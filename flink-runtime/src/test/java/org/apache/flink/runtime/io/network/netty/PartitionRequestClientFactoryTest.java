@@ -18,14 +18,16 @@
 
 package org.apache.flink.runtime.io.network.netty;
 
-import io.netty.channel.ChannelHandler;
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelOutboundHandlerAdapter;
-import io.netty.channel.ChannelPromise;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.io.network.ConnectionID;
 import org.apache.flink.util.NetUtils;
+
+import org.apache.flink.shaded.netty4.io.netty.channel.ChannelHandler;
+import org.apache.flink.shaded.netty4.io.netty.channel.ChannelHandlerContext;
+import org.apache.flink.shaded.netty4.io.netty.channel.ChannelOutboundHandlerAdapter;
+import org.apache.flink.shaded.netty4.io.netty.channel.ChannelPromise;
+
 import org.junit.Ignore;
 import org.junit.Test;
 
@@ -55,7 +57,8 @@ public class PartitionRequestClientFactoryTest {
 		final CountDownLatch syncOnConnect = new CountDownLatch(1);
 
 		final Tuple2<NettyServer, NettyClient> netty = createNettyServerAndClient(
-				new NettyProtocol() {
+				new NettyProtocol(null, null, true) {
+
 					@Override
 					public ChannelHandler[] getServerChannelHandlers() {
 						return new ChannelHandler[0];
@@ -158,7 +161,7 @@ public class PartitionRequestClientFactoryTest {
 	// ------------------------------------------------------------------------
 
 	private static Tuple2<NettyServer, NettyClient> createNettyServerAndClient(NettyProtocol protocol) throws IOException {
-		final NettyConfig config = new NettyConfig(InetAddress.getLocalHost(), SERVER_PORT, 32 * 1024, new Configuration());
+		final NettyConfig config = new NettyConfig(InetAddress.getLocalHost(), SERVER_PORT, 32 * 1024, 1, new Configuration());
 
 		final NettyServer server = new NettyServer(config);
 		final NettyClient client = new NettyClient(config);
@@ -166,8 +169,10 @@ public class PartitionRequestClientFactoryTest {
 		boolean success = false;
 
 		try {
-			server.init(protocol);
-			client.init(protocol);
+			NettyBufferPool bufferPool = new NettyBufferPool(1);
+
+			server.init(protocol, bufferPool);
+			client.init(protocol, bufferPool);
 
 			success = true;
 		}

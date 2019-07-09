@@ -16,17 +16,17 @@
  * limitations under the License.
  */
 
-
 package org.apache.flink.optimizer.dag;
-
-import java.util.Collections;
-import java.util.List;
 
 import org.apache.flink.api.common.operators.base.ReduceOperatorBase;
 import org.apache.flink.optimizer.DataStatistics;
 import org.apache.flink.optimizer.operators.AllReduceProperties;
 import org.apache.flink.optimizer.operators.OperatorDescriptorSingle;
 import org.apache.flink.optimizer.operators.ReduceProperties;
+import org.apache.flink.runtime.operators.DriverStrategy;
+
+import java.util.Collections;
+import java.util.List;
 
 /**
  * The Optimizer representation of a <i>Reduce</i> operator.
@@ -45,10 +45,31 @@ public class ReduceNode extends SingleInputNode {
 			// case of a key-less reducer. force a parallelism of 1
 			setParallelism(1);
 		}
-		
-		OperatorDescriptorSingle props = this.keys == null ?
-			new AllReduceProperties() :
-			new ReduceProperties(this.keys, operator.getCustomPartitioner());
+
+		OperatorDescriptorSingle props;
+
+		if (this.keys == null) {
+			props = new AllReduceProperties();
+		} else {
+			DriverStrategy combinerStrategy;
+			switch(operator.getCombineHint()) {
+				case OPTIMIZER_CHOOSES:
+					combinerStrategy = DriverStrategy.SORTED_PARTIAL_REDUCE;
+					break;
+				case SORT:
+					combinerStrategy = DriverStrategy.SORTED_PARTIAL_REDUCE;
+					break;
+				case HASH:
+					combinerStrategy = DriverStrategy.HASHED_PARTIAL_REDUCE;
+					break;
+				case NONE:
+					combinerStrategy = DriverStrategy.NONE;
+					break;
+				default:
+					throw new RuntimeException("Unknown CombineHint");
+			}
+			props = new ReduceProperties(this.keys, operator.getCustomPartitioner(), combinerStrategy);
+		}
 		
 		this.possibleProperties = Collections.singletonList(props);
 	}

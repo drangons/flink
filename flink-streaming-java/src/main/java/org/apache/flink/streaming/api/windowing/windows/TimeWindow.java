@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,18 +15,33 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.streaming.api.windowing.windows;
 
-import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.annotation.PublicEvolving;
+import org.apache.flink.api.common.typeutils.SimpleTypeSerializerSnapshot;
+import org.apache.flink.api.common.typeutils.TypeSerializerSnapshot;
+import org.apache.flink.api.common.typeutils.base.TypeSerializerSingleton;
+import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
+import org.apache.flink.streaming.api.windowing.assigners.MergingWindowAssigner;
+import org.apache.flink.util.MathUtils;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
 /**
  * A {@link Window} that represents a time interval from {@code start} (inclusive) to
- * {@code start + size} (exclusive).
+ * {@code end} (exclusive).
  */
+@PublicEvolving
 public class TimeWindow extends Window {
 
 	private final long start;
@@ -37,14 +52,35 @@ public class TimeWindow extends Window {
 		this.end = end;
 	}
 
+	/**
+	 * Gets the starting timestamp of the window. This is the first timestamp that belongs
+	 * to this window.
+	 *
+	 * @return The starting timestamp of this window.
+	 */
 	public long getStart() {
 		return start;
 	}
 
+	/**
+	 * Gets the end timestamp of this window. The end timestamp is exclusive, meaning it
+	 * is the first timestamp that does not belong to this window any more.
+	 *
+	 * @return The exclusive end timestamp of this window.
+	 */
 	public long getEnd() {
 		return end;
 	}
 
+	/**
+	 * Gets the largest timestamp that still belongs to this window.
+	 *
+	 * <p>This timestamp is identical to {@code getEnd() - 1}.
+	 *
+	 * @return The largest timestamp that still belongs to this window.
+	 *
+	 * @see #getEnd()
+	 */
 	@Override
 	public long maxTimestamp() {
 		return end - 1;
@@ -66,9 +102,7 @@ public class TimeWindow extends Window {
 
 	@Override
 	public int hashCode() {
-		int result = (int) (start ^ (start >>> 32));
-		result = 31 * result + (int) (end ^ (end >>> 32));
-		return result;
+		return MathUtils.longToIntWithBitMixing(start + end);
 	}
 
 	@Override
@@ -79,17 +113,33 @@ public class TimeWindow extends Window {
 				'}';
 	}
 
-	public static class Serializer extends TypeSerializer<TimeWindow> {
+	/**
+	 * Returns {@code true} if this window intersects the given window.
+	 */
+	public boolean intersects(TimeWindow other) {
+		return this.start <= other.end && this.end >= other.start;
+	}
+
+	/**
+	 * Returns the minimal window covers both this window and the given window.
+	 */
+	public TimeWindow cover(TimeWindow other) {
+		return new TimeWindow(Math.min(start, other.start), Math.max(end, other.end));
+	}
+
+	// ------------------------------------------------------------------------
+	// Serializer
+	// ------------------------------------------------------------------------
+
+	/**
+	 * The serializer used to write the TimeWindow type.
+	 */
+	public static class Serializer extends TypeSerializerSingleton<TimeWindow> {
 		private static final long serialVersionUID = 1L;
 
 		@Override
 		public boolean isImmutableType() {
 			return true;
-		}
-
-		@Override
-		public TypeSerializer<TimeWindow> duplicate() {
-			return this;
 		}
 
 		@Override
@@ -127,9 +177,7 @@ public class TimeWindow extends Window {
 
 		@Override
 		public TimeWindow deserialize(TimeWindow reuse, DataInputView source) throws IOException {
-			long start = source.readLong();
-			long end = source.readLong();
-			return new TimeWindow(start, end);
+			return deserialize(source);
 		}
 
 		@Override
@@ -138,20 +186,87 @@ public class TimeWindow extends Window {
 			target.writeLong(source.readLong());
 		}
 
-		@Override
-		public boolean equals(Object obj) {
-			return obj instanceof Serializer;
-		}
+		// ------------------------------------------------------------------------
 
 		@Override
-		public boolean canEqual(Object obj) {
-			return obj instanceof Serializer;
+		public TypeSerializerSnapshot<TimeWindow> snapshotConfiguration() {
+			return new TimeWindowSerializerSnapshot();
 		}
 
-		@Override
-		public int hashCode() {
-			return 0;
+		/**
+		 * Serializer configuration snapshot for compatibility and format evolution.
+		 */
+		@SuppressWarnings("WeakerAccess")
+		public static final class TimeWindowSerializerSnapshot extends SimpleTypeSerializerSnapshot<TimeWindow> {
+
+			public TimeWindowSerializerSnapshot() {
+				super(Serializer::new);
+			}
 		}
 	}
 
+	// ------------------------------------------------------------------------
+	//  Utilities
+	// ------------------------------------------------------------------------
+
+	/**
+	 * Merge overlapping {@link TimeWindow}s. For use by merging
+	 * {@link org.apache.flink.streaming.api.windowing.assigners.WindowAssigner WindowAssigners}.
+	 */
+	public static void mergeWindows(Collection<TimeWindow> windows, MergingWindowAssigner.MergeCallback<TimeWindow> c) {
+
+		// sort the windows by the start time and then merge overlapping windows
+
+		List<TimeWindow> sortedWindows = new ArrayList<>(windows);
+
+		Collections.sort(sortedWindows, new Comparator<TimeWindow>() {
+			@Override
+			public int compare(TimeWindow o1, TimeWindow o2) {
+				return Long.compare(o1.getStart(), o2.getStart());
+			}
+		});
+
+		List<Tuple2<TimeWindow, Set<TimeWindow>>> merged = new ArrayList<>();
+		Tuple2<TimeWindow, Set<TimeWindow>> currentMerge = null;
+
+		for (TimeWindow candidate: sortedWindows) {
+			if (currentMerge == null) {
+				currentMerge = new Tuple2<>();
+				currentMerge.f0 = candidate;
+				currentMerge.f1 = new HashSet<>();
+				currentMerge.f1.add(candidate);
+			} else if (currentMerge.f0.intersects(candidate)) {
+				currentMerge.f0 = currentMerge.f0.cover(candidate);
+				currentMerge.f1.add(candidate);
+			} else {
+				merged.add(currentMerge);
+				currentMerge = new Tuple2<>();
+				currentMerge.f0 = candidate;
+				currentMerge.f1 = new HashSet<>();
+				currentMerge.f1.add(candidate);
+			}
+		}
+
+		if (currentMerge != null) {
+			merged.add(currentMerge);
+		}
+
+		for (Tuple2<TimeWindow, Set<TimeWindow>> m: merged) {
+			if (m.f1.size() > 1) {
+				c.merge(m.f1, m.f0);
+			}
+		}
+	}
+
+	/**
+	 * Method to get the window start for a timestamp.
+	 *
+	 * @param timestamp epoch millisecond to get the window start.
+	 * @param offset The offset which window start would be shifted by.
+	 * @param windowSize The size of the generated windows.
+	 * @return window start
+	 */
+	public static long getWindowStartWithOffset(long timestamp, long offset, long windowSize) {
+		return timestamp - (timestamp - offset + windowSize) % windowSize;
+	}
 }

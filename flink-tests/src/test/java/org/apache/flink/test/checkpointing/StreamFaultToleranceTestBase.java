@@ -18,59 +18,83 @@
 
 package org.apache.flink.test.checkpointing;
 
-import org.apache.flink.configuration.ConfigConstants;
+import org.apache.flink.api.common.restartstrategy.RestartStrategies;
+import org.apache.flink.client.program.ProgramInvocationException;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.JobManagerOptions;
+import org.apache.flink.runtime.jobgraph.JobGraph;
+import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.test.util.ForkableFlinkMiniCluster;
-
+import org.apache.flink.test.util.MiniClusterWithClientResource;
+import org.apache.flink.test.util.SuccessException;
 import org.apache.flink.util.TestLogger;
-import org.junit.AfterClass;
-import org.junit.BeforeClass;
+
+import org.junit.After;
+import org.junit.Assert;
+import org.junit.Before;
 import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
 
 import java.io.Serializable;
+import java.util.Arrays;
+import java.util.Collection;
 
 import static org.junit.Assert.fail;
 
 /**
- * Test base for fault tolerant streaming programs
+ * Test base for fault tolerant streaming programs.
  */
+@RunWith(Parameterized.class)
 public abstract class StreamFaultToleranceTestBase extends TestLogger {
 
-	protected static final int NUM_TASK_MANAGERS = 2;
-	protected static final int NUM_TASK_SLOTS = 3;
-	protected static final int PARALLELISM = NUM_TASK_MANAGERS * NUM_TASK_SLOTS;
-
-	private static ForkableFlinkMiniCluster cluster;
-
-	@BeforeClass
-	public static void startCluster() {
-		try {
-			Configuration config = new Configuration();
-			config.setInteger(ConfigConstants.LOCAL_NUMBER_TASK_MANAGER, NUM_TASK_MANAGERS);
-			config.setInteger(ConfigConstants.TASK_MANAGER_NUM_TASK_SLOTS, NUM_TASK_SLOTS);
-			config.setString(ConfigConstants.DEFAULT_EXECUTION_RETRY_DELAY_KEY, "0 ms");
-			config.setInteger(ConfigConstants.TASK_MANAGER_MEMORY_SIZE_KEY, 12);
-			
-			cluster = new ForkableFlinkMiniCluster(config, false);
-
-			cluster.start();
-		}
-		catch (Exception e) {
-			e.printStackTrace();
-			fail("Failed to start test cluster: " + e.getMessage());
-		}
+	@Parameterized.Parameters(name = "FailoverStrategy: {0}")
+	public static Collection<FailoverStrategy> parameters() {
+		return Arrays.asList(FailoverStrategy.RestartAllStrategy, FailoverStrategy.RestartPipelinedRegionStrategy);
 	}
 
-	@AfterClass
-	public static void stopCluster() {
-		try {
-			cluster.stop();
-			cluster = null;
+	/**
+	 * The failover strategy to use.
+	 */
+	public enum FailoverStrategy{
+		RestartAllStrategy,
+		RestartPipelinedRegionStrategy
+	}
+
+	@Parameterized.Parameter
+	public FailoverStrategy failoverStrategy;
+
+	protected static final int NUM_TASK_MANAGERS = 3;
+	protected static final int NUM_TASK_SLOTS = 4;
+	protected static final int PARALLELISM = NUM_TASK_MANAGERS * NUM_TASK_SLOTS;
+
+	private static MiniClusterWithClientResource cluster;
+
+	@Before
+	public void setup() throws Exception {
+		Configuration configuration = new Configuration();
+		switch (failoverStrategy) {
+			case RestartPipelinedRegionStrategy:
+				configuration.setString(JobManagerOptions.EXECUTION_FAILOVER_STRATEGY, "region");
+				break;
+			case RestartAllStrategy:
+				configuration.setString(JobManagerOptions.EXECUTION_FAILOVER_STRATEGY, "full");
 		}
-		catch (Exception e) {
-			e.printStackTrace();
-			fail("Failed to stop test cluster: " + e.getMessage());
+
+		cluster = new MiniClusterWithClientResource(
+			new MiniClusterResourceConfiguration.Builder()
+				.setConfiguration(configuration)
+				.setNumberTaskManagers(NUM_TASK_MANAGERS)
+				.setNumberSlotsPerTaskManager(NUM_TASK_SLOTS)
+				.build());
+		cluster.before();
+	}
+
+	@After
+	public void shutDownExistingCluster() {
+		if (cluster != null) {
+			cluster.after();
+			cluster = null;
 		}
 	}
 
@@ -78,35 +102,53 @@ public abstract class StreamFaultToleranceTestBase extends TestLogger {
 	 * Implementations are expected to assemble the test topology in this function
 	 * using the provided {@link StreamExecutionEnvironment}.
 	 */
-	abstract public void testProgram(StreamExecutionEnvironment env);
+	public abstract void testProgram(StreamExecutionEnvironment env);
 
 	/**
 	 * Implementations are expected to provide test here to verify the correct behavior.
 	 */
-	abstract public void postSubmit() throws Exception ;
+	public abstract void postSubmit() throws Exception;
 
 	/**
 	 * Runs the following program the test program defined in {@link #testProgram(StreamExecutionEnvironment)}
 	 * followed by the checks in {@link #postSubmit}.
 	 */
 	@Test
-	public void runCheckpointedProgram() {
+	public void runCheckpointedProgram() throws Exception {
 		try {
-			StreamExecutionEnvironment env = StreamExecutionEnvironment.createRemoteEnvironment(
-					"localhost", cluster.getLeaderRPCPort());
+			StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 			env.setParallelism(PARALLELISM);
 			env.enableCheckpointing(500);
 			env.getConfig().disableSysoutLogging();
+			env.setRestartStrategy(RestartStrategies.fixedDelayRestart(Integer.MAX_VALUE, 0L));
 
 			testProgram(env);
 
-			env.execute();
+			JobGraph jobGraph = env.getStreamGraph().getJobGraph();
+			try {
+				cluster.getClusterClient().submitJob(jobGraph, getClass().getClassLoader()).getJobExecutionResult();
+			}
+			catch (ProgramInvocationException root) {
+				Throwable cause = root.getCause();
+
+				// search for nested SuccessExceptions
+				int depth = 0;
+				while (!(cause instanceof SuccessException)) {
+					if (cause == null || depth++ == 20) {
+						root.printStackTrace();
+						fail("Test failed: " + root.getMessage());
+					}
+					else {
+						cause = cause.getCause();
+					}
+				}
+			}
 
 			postSubmit();
 		}
 		catch (Exception e) {
 			e.printStackTrace();
-			fail(e.getMessage());
+			Assert.fail(e.getMessage());
 		}
 	}
 
@@ -114,6 +156,9 @@ public abstract class StreamFaultToleranceTestBase extends TestLogger {
 	//  Frequently used utilities
 	// --------------------------------------------------------------------------------------------
 
+	/**
+	 * POJO storing prefix, value, and count.
+	 */
 	@SuppressWarnings("serial")
 	public static class PrefixCount implements Serializable {
 

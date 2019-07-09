@@ -148,16 +148,15 @@ class GroupReduceITCase(mode: TestExecutionMode) extends MultipleProgramsTestBas
     val ds =  CollectionDataSets.getCustomTypeDataSet(env)
     val reduceDs =  ds.groupBy(_.myInt).reduceGroup {
       in =>
-        val iter = in.toIterator
         val o = new CustomType
-        val c = iter.next()
+        val c = in.next()
 
         o.myString = "Hello!"
         o.myInt = c.myInt
         o.myLong = c.myLong
 
-        while (iter.hasNext) {
-          val next = iter.next()
+        while (in.hasNext) {
+          val next = in.next()
           o.myLong += next.myLong
         }
         o
@@ -270,17 +269,19 @@ class GroupReduceITCase(mode: TestExecutionMode) extends MultipleProgramsTestBas
       .map( t => MutableTuple3(t._1, t._2, t._3) )
     
     val reduceDs =  ds.groupBy(1).reduceGroup {
-      (in, out: Collector[MutableTuple3[Int, Long, String]]) =>
-        for (t <- in) {
-          if (t._1 < 4) {
-            t._3 = "Hi!"
-            t._1 += 10
-            out.collect(t)
-            t._1 += 10
-            t._3 = "Hi again!"
-            out.collect(t)
+      (
+        in: Iterator[MutableTuple3[Int, Long, String]],
+        out: Collector[MutableTuple3[Int, Long, String]]) =>
+          for (t <- in) {
+            if (t._1 < 4) {
+              t._3 = "Hi!"
+              t._1 += 10
+              out.collect(t)
+              t._1 += 10
+              t._3 = "Hi again!"
+              out.collect(t)
+            }
           }
-        }
     }
     val result: Seq[String] = reduceDs.collect().map(x => s"${x._1},${x._2},${x._3}").sorted
     
@@ -489,13 +490,15 @@ class GroupReduceITCase(mode: TestExecutionMode) extends MultipleProgramsTestBas
     val ds =  CollectionDataSets.getPojoContainingTupleAndWritable(env)
     
     val reduceDs = ds.groupBy("hadoopFan", "theTuple.*").reduceGroup {
-      (values, out: Collector[Int]) => {
-        var c: Int = 0
-        for (v <- values) {
-          c += 1
+      (
+        values: Iterator[CollectionDataSets.PojoContainingTupleAndWritable],
+        out: Collector[Int]) => {
+          var c: Int = 0
+          for (v <- values) {
+            c += 1
+          }
+          out.collect(c)
         }
-        out.collect(c)
-      }
     }
     
     val result: Seq[Int] = reduceDs.collect().sorted
@@ -512,9 +515,11 @@ class GroupReduceITCase(mode: TestExecutionMode) extends MultipleProgramsTestBas
     val ds = CollectionDataSets.getTupleContainingPojos(env)
     
     val reduceDs =  ds.groupBy("_1", "_2.*").reduceGroup {
-      (values, out: Collector[Int]) => {
-        out.collect(values.size)
-      }
+      (
+        values: Iterator[(Int, CollectionDataSets.CrazyNested, CollectionDataSets.POJO)],
+        out: Collector[Int]) => {
+          out.collect(values.size)
+        }
     }
     
     val result: Seq[Int] = reduceDs.collect().sorted
@@ -644,20 +649,22 @@ class GroupReduceITCase(mode: TestExecutionMode) extends MultipleProgramsTestBas
       .sortGroup("theTuple._1", Order.DESCENDING)
       .sortGroup("theTuple._2", Order.DESCENDING)
       .reduceGroup {
-        (values, out: Collector[String]) => {
-          var once: Boolean = false
-          val concat: StringBuilder = new StringBuilder
-          for (value <- values) {
-            if (!once) {
-              concat.append(value.hadoopFan.get)
-              concat.append("---")
-              once = true
+        (
+          values: Iterator[CollectionDataSets.PojoContainingTupleAndWritable],
+          out: Collector[String]) => {
+            var once: Boolean = false
+            val concat: StringBuilder = new StringBuilder
+            for (value <- values) {
+              if (!once) {
+                concat.append(value.hadoopFan.get)
+                concat.append("---")
+                once = true
+              }
+              concat.append(value.theTuple)
+              concat.append("-")
             }
-            concat.append(value.theTuple)
-            concat.append("-")
+            out.collect(concat.toString())
           }
-          out.collect(concat.toString())
-        }
       }
     
     val result: Seq[String] = reduceDs.map(_.toString()).collect().sorted
@@ -703,16 +710,15 @@ class GroupReduceITCase(mode: TestExecutionMode) extends MultipleProgramsTestBas
     
     val reduceDs =  ds.groupBy(_.myInt).sortGroup(_.myString, Order.DESCENDING).reduceGroup {
       in =>
-        val iter = in.toIterator
         val o = new CustomType
-        val c = iter.next()
+        val c = in.next()
 
         val concat: StringBuilder = new StringBuilder(c.myString)
         o.myInt = c.myInt
         o.myLong = c.myLong
 
-        while (iter.hasNext) {
-          val next = iter.next()
+        while (in.hasNext) {
+          val next = in.next()
           o.myLong += next.myLong
           concat.append("-").append(next.myString)
         }
@@ -768,19 +774,18 @@ class GroupReduceITCase(mode: TestExecutionMode) extends MultipleProgramsTestBas
 
     val reduceDs = ds.groupBy(_._1).sortGroup(t => (t._5, t._3), Order.DESCENDING).reduceGroup{
       in =>
-        val iter = in.toIterator
         val concat: StringBuilder = new StringBuilder
         var sum: Long = 0
         var key = 0
         var s: Long = 0
-        while (iter.hasNext) {
-          val next = iter.next()
+        while (in.hasNext) {
+          val next = in.next()
           sum += next._2
           key = next._1
           s = next._5
           concat.append(next._4).append("-")
         }
-        if (concat.length > 0) {
+        if (concat.nonEmpty) {
           concat.setLength(concat.length - 1)
         }
         (key, sum, 0, concat.toString(), s)
@@ -806,13 +811,15 @@ class GroupReduceITCase(mode: TestExecutionMode) extends MultipleProgramsTestBas
     val ds =  CollectionDataSets.getPojoWithMultiplePojos(env)
     
     val reduceDs =  ds.groupBy("p2.a2").reduceGroup {
-      (values, out: Collector[String]) => {
-        val concat: StringBuilder = new StringBuilder()
-        for (value <- values) {
-          concat.append(value.p2.a2)
+      (
+        values: Iterator[CollectionDataSets.PojoWithMultiplePojos],
+        out: Collector[String]) => {
+          val concat: StringBuilder = new StringBuilder()
+          for (value <- values) {
+            concat.append(value.p2.a2)
+          }
+          out.collect(concat.toString())
         }
-        out.collect(concat.toString())
-      }
     }
     
     val result : Seq[String] = reduceDs.map(_.toString()).collect().sorted
@@ -833,9 +840,10 @@ class GroupReduceITCase(mode: TestExecutionMode) extends MultipleProgramsTestBas
   }
 }
 
-@RichGroupReduceFunction.Combinable
-class OrderCheckingCombinableReduce extends
-RichGroupReduceFunction[MutableTuple3[Int, Long, String], MutableTuple3[Int, Long, String]] {
+class OrderCheckingCombinableReduce
+  extends GroupReduceFunction[MutableTuple3[Int, Long, String], MutableTuple3[Int, Long, String]]
+  with GroupCombineFunction[MutableTuple3[Int, Long, String], MutableTuple3[Int, Long, String]]
+{
   
   def reduce(
               values: Iterable[MutableTuple3[Int, Long, String]],
@@ -871,9 +879,10 @@ RichGroupReduceFunction[MutableTuple3[Int, Long, String], MutableTuple3[Int, Lon
   }
 }
 
-@RichGroupReduceFunction.Combinable
 class CustomTypeGroupReduceWithCombine
-  extends RichGroupReduceFunction[CustomType, CustomType] {
+  extends GroupReduceFunction[CustomType, CustomType]
+  with GroupCombineFunction[CustomType, CustomType]
+{
   override def combine(values: Iterable[CustomType], out: Collector[CustomType]): Unit = {
     val o = new CustomType()
     for (c <- values.asScala) {
@@ -895,9 +904,10 @@ class CustomTypeGroupReduceWithCombine
   }
 }
 
-@RichGroupReduceFunction.Combinable
 class Tuple3GroupReduceWithCombine
-  extends RichGroupReduceFunction[(Int, Long, String), (Int, String)] {
+  extends GroupReduceFunction[(Int, Long, String), (Int, String)]
+  with GroupCombineFunction[(Int, Long, String), (Int, Long, String)]
+{
   override def combine(
                         values: Iterable[(Int, Long, String)],
                         out: Collector[(Int, Long, String)]): Unit = {
@@ -925,12 +935,13 @@ class Tuple3GroupReduceWithCombine
   }
 }
 
-@RichGroupReduceFunction.Combinable
 class Tuple3AllGroupReduceWithCombine
-  extends RichGroupReduceFunction[(Int, Long, String), (Int, String)] {
+  extends GroupReduceFunction[(Int, Long, String), (Int, String)]
+  with GroupCombineFunction[(Int, Long, String), (Int, Long, String)]
+{
   override def combine(
-                        values: Iterable[(Int, Long, String)],
-                        out: Collector[(Int, Long, String)]): Unit = {
+    values: Iterable[(Int, Long, String)], out: Collector[(Int, Long, String)]): Unit =
+  {
     var i = 0
     var l = 0L
     var s = ""
@@ -971,13 +982,15 @@ class NestedTupleReducer extends GroupReduceFunction[((Int, Int), String), Strin
   }
 }
 
-@RichGroupReduceFunction.Combinable
 class Tuple3SortedGroupReduceWithCombine
-  extends RichGroupReduceFunction[(Int, Long, String), (Int, String)] {
+  extends GroupReduceFunction[(Int, Long, String), (Int, String)]
+  with GroupCombineFunction[(Int, Long, String), (Int, Long, String)]
+{
 
   override def combine(
-                        values: Iterable[(Int, Long, String)],
-                        out: Collector[(Int, Long, String)]): Unit = {
+    values: Iterable[(Int, Long, String)], out: Collector[(Int, Long, String)]): Unit =
+  {
+
     val concat: StringBuilder = new StringBuilder
     var sum = 0
     var key: Long = 0
@@ -986,7 +999,7 @@ class Tuple3SortedGroupReduceWithCombine
       key = t._2
       concat.append(t._3).append("-")
     }
-    if (concat.length > 0) {
+    if (concat.nonEmpty) {
       concat.setLength(concat.length - 1)
     }
     out.collect((sum, key, concat.toString()))

@@ -18,10 +18,15 @@
 
 package org.apache.flink.api.java.aggregation;
 
+import org.apache.flink.annotation.Internal;
 import org.apache.flink.types.CopyableValue;
 import org.apache.flink.types.ResettableValue;
 
-
+/**
+ * Implementations of {@link AggregationFunction} for min operation.
+ * @param <T> aggregating type
+ */
+@Internal
 public abstract class MinAggregationFunction<T extends Comparable<T>> extends AggregationFunction<T> {
 	private static final long serialVersionUID = 1L;
 
@@ -32,7 +37,7 @@ public abstract class MinAggregationFunction<T extends Comparable<T>> extends Ag
 
 	// --------------------------------------------------------------------------------------------
 
-	public static final class ImmutableMinAgg<U extends Comparable<U>> extends MinAggregationFunction<U> {
+	private static final class ImmutableMinAgg<U extends Comparable<U>> extends MinAggregationFunction<U> {
 		private static final long serialVersionUID = 1L;
 
 		private U value;
@@ -60,7 +65,7 @@ public abstract class MinAggregationFunction<T extends Comparable<T>> extends Ag
 
 	// --------------------------------------------------------------------------------------------
 
-	public static final class MutableMinAgg<U extends Comparable<U> & ResettableValue<U> & CopyableValue<U>> extends MinAggregationFunction<U> {
+	private static final class MutableMinAgg<U extends Comparable<U> & ResettableValue<U> & CopyableValue<U>> extends MinAggregationFunction<U> {
 		private static final long serialVersionUID = 1L;
 
 		private U value;
@@ -87,23 +92,26 @@ public abstract class MinAggregationFunction<T extends Comparable<T>> extends Ag
 			return value;
 		}
 	}
-	
+
 	// --------------------------------------------------------------------------------------------
-	
+
+	/**
+	 * Factory for {@link MinAggregationFunction}.
+	 */
 	public static final class MinAggregationFunctionFactory implements AggregationFunctionFactory {
 		private static final long serialVersionUID = 1L;
-		
+
 		@SuppressWarnings({ "unchecked", "rawtypes" })
 		@Override
 		public <T> AggregationFunction<T> createAggregationFunction(Class<T> type) {
 			if (Comparable.class.isAssignableFrom(type)) {
-				if (ResettableValue.class.isAssignableFrom(type) & CopyableValue.class.isAssignableFrom(type)) {
+				if (ResettableValue.class.isAssignableFrom(type) && CopyableValue.class.isAssignableFrom(type)) {
 					return (AggregationFunction<T>) new MutableMinAgg();
 				} else {
 					return (AggregationFunction<T>) new ImmutableMinAgg();
 				}
 			} else {
-				throw new UnsupportedAggregationTypeException("The type " + type.getName() + 
+				throw new UnsupportedAggregationTypeException("The type " + type.getName() +
 					" is not supported for minimum aggregation. " +
 					"Minimum aggregatable types must implement the Comparable interface.");
 			}

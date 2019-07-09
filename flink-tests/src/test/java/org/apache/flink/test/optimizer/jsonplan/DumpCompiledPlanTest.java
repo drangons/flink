@@ -22,51 +22,78 @@ import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.Plan;
 import org.apache.flink.client.program.OptimizerPlanEnvironment;
 import org.apache.flink.client.program.PreviewPlanEnvironment;
+import org.apache.flink.examples.java.clustering.KMeans;
+import org.apache.flink.examples.java.graph.ConnectedComponents;
+import org.apache.flink.examples.java.graph.PageRank;
+import org.apache.flink.examples.java.relational.TPCHQuery3;
+import org.apache.flink.examples.java.relational.WebLogAnalysis;
+import org.apache.flink.examples.java.wordcount.WordCount;
 import org.apache.flink.optimizer.plan.OptimizedPlan;
 import org.apache.flink.optimizer.plandump.PlanJSONDumpGenerator;
-import org.apache.flink.examples.java.clustering.KMeans;
 import org.apache.flink.optimizer.util.CompilerTestBase;
-import org.apache.flink.test.recordJobs.graph.DeltaPageRankWithInitialDeltas;
-import org.apache.flink.test.recordJobs.kmeans.KMeansBroadcast;
-import org.apache.flink.test.recordJobs.kmeans.KMeansSingleStep;
-import org.apache.flink.test.recordJobs.relational.TPCHQuery3;
-import org.apache.flink.test.recordJobs.relational.WebLogAnalysis;
-import org.apache.flink.test.recordJobs.wordcount.WordCount;
-import org.codehaus.jackson.JsonFactory;
-import org.codehaus.jackson.JsonParseException;
-import org.codehaus.jackson.JsonParser;
+
+import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.core.JsonFactory;
+import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.core.JsonParseException;
+import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.core.JsonParser;
+
 import org.junit.Assert;
 import org.junit.Test;
 
-/*
+/**
  * The tests in this class simply invokes the JSON dump code for the optimized plan.
  */
 public class DumpCompiledPlanTest extends CompilerTestBase {
-	
+
 	@Test
 	public void dumpWordCount() {
-		dump(new WordCount().getPlan(DEFAULT_PARALLELISM_STRING, IN_FILE, OUT_FILE));
+		// prepare the test environment
+		PreviewPlanEnvironment env = new PreviewPlanEnvironment();
+		env.setAsContext();
+		try {
+			WordCount.main(new String[] {
+					"--input", IN_FILE,
+					"--output", OUT_FILE});
+		} catch (OptimizerPlanEnvironment.ProgramAbortException pae) {
+			// all good.
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail("WordCount failed with an exception");
+		}
+		dump(env.getPlan());
 	}
-	
+
 	@Test
 	public void dumpTPCH3() {
-		dump(new TPCHQuery3().getPlan(DEFAULT_PARALLELISM_STRING, IN_FILE, IN_FILE, OUT_FILE));
+		// prepare the test environment
+		PreviewPlanEnvironment env = new PreviewPlanEnvironment();
+		env.setAsContext();
+		try {
+			TPCHQuery3.main(new String[] {
+					"--lineitem", IN_FILE,
+					"--customer", IN_FILE,
+					"--orders", OUT_FILE,
+					"--output", "123"});
+		} catch (OptimizerPlanEnvironment.ProgramAbortException pae) {
+			// all good.
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail("TPCH3 failed with an exception");
+		}
+		dump(env.getPlan());
 	}
-	
-	@Test
-	public void dumpKMeans() {
-		dump(new KMeansSingleStep().getPlan(DEFAULT_PARALLELISM_STRING, IN_FILE, IN_FILE, OUT_FILE));
-	}
-	
+
 	@Test
 	public void dumpIterativeKMeans() {
 		// prepare the test environment
 		PreviewPlanEnvironment env = new PreviewPlanEnvironment();
 		env.setAsContext();
 		try {
-			// <points path> <centers path> <result path> <num iterations
-			KMeans.main(new String[] {IN_FILE, IN_FILE, OUT_FILE, "123"});
-		} catch(OptimizerPlanEnvironment.ProgramAbortException pae) {
+			KMeans.main(new String[] {
+				"--points ", IN_FILE,
+				"--centroids ", IN_FILE,
+				"--output ", OUT_FILE,
+				"--iterations", "123"});
+		} catch (OptimizerPlanEnvironment.ProgramAbortException pae) {
 			// all good.
 		} catch (Exception e) {
 			e.printStackTrace();
@@ -74,22 +101,68 @@ public class DumpCompiledPlanTest extends CompilerTestBase {
 		}
 		dump(env.getPlan());
 	}
-	
+
 	@Test
 	public void dumpWebLogAnalysis() {
-		dump(new WebLogAnalysis().getPlan(DEFAULT_PARALLELISM_STRING, IN_FILE, IN_FILE, IN_FILE, OUT_FILE));
+		// prepare the test environment
+		PreviewPlanEnvironment env = new PreviewPlanEnvironment();
+		env.setAsContext();
+		try {
+			WebLogAnalysis.main(new String[] {
+					"--documents", IN_FILE,
+					"--ranks", IN_FILE,
+					"--visits", OUT_FILE,
+					"--output", "123"});
+		} catch (OptimizerPlanEnvironment.ProgramAbortException pae) {
+			// all good.
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail("WebLogAnalysis failed with an exception");
+		}
+		dump(env.getPlan());
 	}
 
 	@Test
 	public void dumpBulkIterationKMeans() {
-		dump(new KMeansBroadcast().getPlan(DEFAULT_PARALLELISM_STRING, IN_FILE, OUT_FILE));
+		// prepare the test environment
+		PreviewPlanEnvironment env = new PreviewPlanEnvironment();
+		env.setAsContext();
+		try {
+			ConnectedComponents.main(new String[] {
+					"--vertices", IN_FILE,
+					"--edges", IN_FILE,
+					"--output", OUT_FILE,
+					"--iterations", "123"});
+		} catch (OptimizerPlanEnvironment.ProgramAbortException pae) {
+			// all good.
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail("ConnectedComponents failed with an exception");
+		}
+		dump(env.getPlan());
 	}
-	
+
 	@Test
-	public void dumpDeltaPageRank() {
-		dump(new DeltaPageRankWithInitialDeltas().getPlan(DEFAULT_PARALLELISM_STRING, IN_FILE, IN_FILE, IN_FILE, OUT_FILE, "10"));
+	public void dumpPageRank() {
+		// prepare the test environment
+		PreviewPlanEnvironment env = new PreviewPlanEnvironment();
+		env.setAsContext();
+		try {
+			PageRank.main(new String[]{
+					"--pages", IN_FILE,
+					"--links", IN_FILE,
+					"--output", OUT_FILE,
+					"--numPages", "10",
+					"--iterations", "123"});
+		} catch (OptimizerPlanEnvironment.ProgramAbortException pae) {
+			// all good.
+		} catch (Exception e) {
+			e.printStackTrace();
+			Assert.fail("PageRank failed with an exception");
+		}
+		dump(env.getPlan());
 	}
-	
+
 	private void dump(Plan p) {
 		p.setExecutionConfig(new ExecutionConfig());
 		try {
@@ -97,7 +170,7 @@ public class DumpCompiledPlanTest extends CompilerTestBase {
 			PlanJSONDumpGenerator dumper = new PlanJSONDumpGenerator();
 			String json = dumper.getOptimizerPlanAsJSON(op);
 			JsonParser parser = new JsonFactory().createJsonParser(json);
-			while (parser.nextToken() != null);
+			while (parser.nextToken() != null) {}
 		} catch (JsonParseException e) {
 			e.printStackTrace();
 			Assert.fail("JSON Generator produced malformatted output: " + e.getMessage());

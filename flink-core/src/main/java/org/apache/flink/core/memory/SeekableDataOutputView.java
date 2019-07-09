@@ -16,19 +16,21 @@
  * limitations under the License.
  */
 
-
 package org.apache.flink.core.memory;
+
+import org.apache.flink.annotation.PublicEvolving;
 
 /**
  * Interface marking a {@link DataOutputView} as seekable. Seekable views can set the position where they
  * write to.
  */
+@PublicEvolving
 public interface SeekableDataOutputView extends DataOutputView {
-	
+
 	/**
 	 * Sets the write pointer to the given position.
-	 * 
+	 *
 	 * @param position The new write position.
 	 */
-	public void setWritePosition(long position);
+	void setWritePosition(long position);
 }

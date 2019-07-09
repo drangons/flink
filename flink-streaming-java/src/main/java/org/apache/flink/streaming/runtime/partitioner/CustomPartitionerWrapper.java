@@ -17,6 +17,7 @@
 
 package org.apache.flink.streaming.runtime.partitioner;
 
+import org.apache.flink.annotation.Internal;
 import org.apache.flink.api.common.functions.Partitioner;
 import org.apache.flink.api.java.functions.KeySelector;
 import org.apache.flink.runtime.plugable.SerializationDelegate;
@@ -30,10 +31,10 @@ import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
  * @param <T>
  *            Type of the data
  */
+@Internal
 public class CustomPartitionerWrapper<K, T> extends StreamPartitioner<T> {
 	private static final long serialVersionUID = 1L;
 
-	private int[] returnArray = new int[1];
 	Partitioner<K> partitioner;
 	KeySelector<T, K> keySelector;
 
@@ -43,19 +44,15 @@ public class CustomPartitionerWrapper<K, T> extends StreamPartitioner<T> {
 	}
 
 	@Override
-	public int[] selectChannels(SerializationDelegate<StreamRecord<T>> record, int numberOfOutputChannels) {
-
-		K key = null;
+	public int selectChannel(SerializationDelegate<StreamRecord<T>> record) {
+		K key;
 		try {
 			key = keySelector.getKey(record.getInstance().getValue());
 		} catch (Exception e) {
 			throw new RuntimeException("Could not extract key from " + record.getInstance(), e);
 		}
 
-		returnArray[0] = partitioner.partition(key,
-				numberOfOutputChannels);
-
-		return returnArray;
+		return partitioner.partition(key, numberOfChannels);
 	}
 
 	@Override

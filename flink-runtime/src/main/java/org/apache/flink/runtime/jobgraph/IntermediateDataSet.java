@@ -23,7 +23,7 @@ import org.apache.flink.runtime.io.network.partition.ResultPartitionType;
 import java.util.ArrayList;
 import java.util.List;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static org.apache.flink.util.Preconditions.checkNotNull;
 
 /**
  * An intermediate data set is the data set produced by an operator - either a
@@ -47,14 +47,6 @@ public class IntermediateDataSet implements java.io.Serializable {
 	private final ResultPartitionType resultType;
 	
 	// --------------------------------------------------------------------------------------------
-	
-	public IntermediateDataSet(JobVertex producer) {
-		this(new IntermediateDataSetID(), producer);
-	}
-	
-	public IntermediateDataSet(IntermediateDataSetID id, JobVertex producer) {
-		this(id, ResultPartitionType.PIPELINED, producer);
-	}
 
 	public IntermediateDataSet(IntermediateDataSetID id, ResultPartitionType resultType, JobVertex producer) {
 		this.id = checkNotNull(id);

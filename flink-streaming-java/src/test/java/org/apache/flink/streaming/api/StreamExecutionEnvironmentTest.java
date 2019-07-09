@@ -17,33 +17,51 @@
 
 package org.apache.flink.streaming.api;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
-
-import java.util.Arrays;
-import java.util.Iterator;
-import java.util.List;
-import java.util.NoSuchElementException;
-
+import org.apache.flink.api.common.functions.FlatMapFunction;
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.DataStreamSource;
+import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.sink.DiscardingSink;
 import org.apache.flink.streaming.api.functions.source.FromElementsFunction;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
 import org.apache.flink.streaming.api.functions.source.StatefulSequenceSource;
 import org.apache.flink.streaming.api.graph.StreamGraph;
 import org.apache.flink.streaming.api.operators.AbstractUdfStreamOperator;
 import org.apache.flink.streaming.api.operators.StreamOperator;
-import org.apache.flink.streaming.util.NoOpSink;
-import org.apache.flink.streaming.util.StreamingMultipleProgramsTestBase;
-import org.apache.flink.streaming.util.TestStreamEnvironment;
+import org.apache.flink.util.Collector;
 import org.apache.flink.util.SplittableIterator;
+
+import org.junit.Assert;
 import org.junit.Test;
 
-public class StreamExecutionEnvironmentTest extends StreamingMultipleProgramsTestBase {
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.List;
+import java.util.NoSuchElementException;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
+/**
+ * Tests for {@link StreamExecutionEnvironment}.
+ */
+public class StreamExecutionEnvironmentTest {
+
+	@Test
+	public void fromElementsWithBaseTypeTest1() {
+		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+		env.fromElements(ParentClass.class, new SubClass(1, "Java"), new ParentClass(1, "hello"));
+	}
+
+	@Test(expected = IllegalArgumentException.class)
+	public void fromElementsWithBaseTypeTest2() {
+		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+		env.fromElements(SubClass.class, new SubClass(1, "Java"), new ParentClass(1, "hello"));
+	}
 
 	@Test
 	@SuppressWarnings("unchecked")
@@ -62,14 +80,14 @@ public class StreamExecutionEnvironmentTest extends StreamingMultipleProgramsTes
 				// expected
 			}
 
-			dataStream1.addSink(new NoOpSink<Integer>());
-	
+			dataStream1.addSink(new DiscardingSink<Integer>());
+
 			DataStreamSource<Integer> dataStream2 = env.fromParallelCollection(new DummySplittableIterator<Integer>(),
 					typeInfo).setParallelism(4);
 
-			dataStream2.addSink(new NoOpSink<Integer>());
+			dataStream2.addSink(new DiscardingSink<Integer>());
 
-			String plan = env.getExecutionPlan();
+			env.getExecutionPlan();
 
 			assertEquals("Parallelism of collection source must be 1.", 1, env.getStreamGraph().getStreamNode(dataStream1.getId()).getParallelism());
 			assertEquals("Parallelism of parallel collection source must be 4.",
@@ -98,7 +116,7 @@ public class StreamExecutionEnvironmentTest extends StreamingMultipleProgramsTes
 			}
 		};
 		DataStreamSource<Integer> src1 = env.addSource(srcFun);
-		src1.addSink(new NoOpSink<Integer>());
+		src1.addSink(new DiscardingSink<Integer>());
 		assertEquals(srcFun, getFunctionFromDataSource(src1));
 
 		List<Long> list = Arrays.asList(0L, 1L, 2L);
@@ -113,10 +131,104 @@ public class StreamExecutionEnvironmentTest extends StreamingMultipleProgramsTes
 		assertTrue(getFunctionFromDataSource(src4) instanceof FromElementsFunction);
 	}
 
+	@Test
+	public void testParallelismBounds() {
+		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+
+		SourceFunction<Integer> srcFun = new SourceFunction<Integer>() {
+			private static final long serialVersionUID = 1L;
+
+			@Override
+			public void run(SourceContext<Integer> ctx) throws Exception {
+			}
+
+			@Override
+			public void cancel() {
+			}
+		};
+
+		SingleOutputStreamOperator<Object> operator =
+				env.addSource(srcFun).flatMap(new FlatMapFunction<Integer, Object>() {
+
+			private static final long serialVersionUID = 1L;
+
+			@Override
+			public void flatMap(Integer value, Collector<Object> out) throws Exception {
+
+			}
+		});
+
+		// default value for max parallelism
+		Assert.assertEquals(-1, operator.getTransformation().getMaxParallelism());
+
+		// bounds for parallelism 1
+		try {
+			operator.setParallelism(0);
+			Assert.fail();
+		} catch (IllegalArgumentException expected) {
+		}
+
+		// bounds for parallelism 2
+		operator.setParallelism(1);
+		Assert.assertEquals(1, operator.getParallelism());
+
+		// bounds for parallelism 3
+		operator.setParallelism(1 << 15);
+		Assert.assertEquals(1 << 15, operator.getParallelism());
+
+		// default value after generating
+		env.getStreamGraph().getJobGraph();
+		Assert.assertEquals(-1, operator.getTransformation().getMaxParallelism());
+
+		// configured value after generating
+		env.setMaxParallelism(42);
+		env.getStreamGraph().getJobGraph();
+		Assert.assertEquals(42, operator.getTransformation().getMaxParallelism());
+
+		// bounds configured parallelism 1
+		try {
+			env.setMaxParallelism(0);
+			Assert.fail();
+		} catch (IllegalArgumentException expected) {
+		}
+
+		// bounds configured parallelism 2
+		try {
+			env.setMaxParallelism(1 + (1 << 15));
+			Assert.fail();
+		} catch (IllegalArgumentException expected) {
+		}
+
+		// bounds for max parallelism 1
+		try {
+			operator.setMaxParallelism(0);
+			Assert.fail();
+		} catch (IllegalArgumentException expected) {
+		}
+
+		// bounds for max parallelism 2
+		try {
+			operator.setMaxParallelism(1 + (1 << 15));
+			Assert.fail();
+		} catch (IllegalArgumentException expected) {
+		}
+
+		// bounds for max parallelism 3
+		operator.setMaxParallelism(1);
+		Assert.assertEquals(1, operator.getTransformation().getMaxParallelism());
+
+		// bounds for max parallelism 4
+		operator.setMaxParallelism(1 << 15);
+		Assert.assertEquals(1 << 15, operator.getTransformation().getMaxParallelism());
+
+		// override config
+		env.getStreamGraph().getJobGraph();
+		Assert.assertEquals(1 << 15 , operator.getTransformation().getMaxParallelism());
+	}
+
 	/////////////////////////////////////////////////////////////
 	// Utilities
 	/////////////////////////////////////////////////////////////
-
 
 	private static StreamOperator<?> getOperatorFromDataStream(DataStream<?> dataStream) {
 		StreamExecutionEnvironment env = dataStream.getExecutionEnvironment();
@@ -124,14 +236,15 @@ public class StreamExecutionEnvironmentTest extends StreamingMultipleProgramsTes
 		return streamGraph.getStreamNode(dataStream.getId()).getOperator();
 	}
 
+	@SuppressWarnings("unchecked")
 	private static <T> SourceFunction<T> getFunctionFromDataSource(DataStreamSource<T> dataStreamSource) {
-		dataStreamSource.addSink(new NoOpSink<T>());
+		dataStreamSource.addSink(new DiscardingSink<T>());
 		AbstractUdfStreamOperator<?, ?> operator =
 				(AbstractUdfStreamOperator<?, ?>) getOperatorFromDataStream(dataStreamSource);
 		return (SourceFunction<T>) operator.getUserFunction();
 	}
 
-	public static class DummySplittableIterator<T> extends SplittableIterator<T> {
+	private static class DummySplittableIterator<T> extends SplittableIterator<T> {
 		private static final long serialVersionUID = 1312752876092210499L;
 
 		@SuppressWarnings("unchecked")
@@ -158,6 +271,21 @@ public class StreamExecutionEnvironmentTest extends StreamingMultipleProgramsTes
 		@Override
 		public void remove() {
 			throw new UnsupportedOperationException();
+		}
+	}
+
+	private static class ParentClass {
+		int num;
+		String string;
+		public ParentClass(int num, String string) {
+			this.num = num;
+			this.string = string;
+		}
+	}
+
+	private static class SubClass extends ParentClass{
+		public SubClass(int num, String string) {
+			super(num, string);
 		}
 	}
 }

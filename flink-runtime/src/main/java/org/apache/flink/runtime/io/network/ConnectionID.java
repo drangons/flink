@@ -19,29 +19,31 @@
 package org.apache.flink.runtime.io.network;
 
 import org.apache.flink.runtime.executiongraph.IntermediateResult;
-import org.apache.flink.runtime.instance.InstanceConnectionInfo;
+import org.apache.flink.runtime.taskmanager.TaskManagerLocation;
 
 import java.io.Serializable;
 import java.net.InetSocketAddress;
 
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static org.apache.flink.util.Preconditions.checkArgument;
+import static org.apache.flink.util.Preconditions.checkNotNull;
 
 /**
  * A {@link ConnectionID} identifies a connection to a remote task manager by the socket address and
  * a connection index. This allows multiple connections to the same task manager to be distinguished
  * by their connection index.
  *
- * <p> The connection index is assigned by the {@link IntermediateResult} and ensures that it is
+ * <p>The connection index is assigned by the {@link IntermediateResult} and ensures that it is
  * safe to multiplex multiple data transfers over the same physical TCP connection.
  */
 public class ConnectionID implements Serializable {
+
+	private static final long serialVersionUID = -8068626194818666857L;
 
 	private final InetSocketAddress address;
 
 	private final int connectionIndex;
 
-	public ConnectionID(InstanceConnectionInfo connectionInfo, int connectionIndex) {
+	public ConnectionID(TaskManagerLocation connectionInfo, int connectionIndex) {
 		this(new InetSocketAddress(connectionInfo.address(), connectionInfo.dataPort()), connectionIndex);
 	}
 

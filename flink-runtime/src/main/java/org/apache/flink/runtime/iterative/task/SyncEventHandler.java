@@ -18,28 +18,30 @@
 
 package org.apache.flink.runtime.iterative.task;
 
-import java.util.Map;
-
 import org.apache.flink.api.common.aggregators.Aggregator;
 import org.apache.flink.runtime.event.TaskEvent;
-import org.apache.flink.runtime.util.event.EventListener;
 import org.apache.flink.runtime.iterative.event.WorkerDoneEvent;
+import org.apache.flink.runtime.util.event.EventListener;
 import org.apache.flink.types.Value;
+import org.apache.flink.util.Preconditions;
 
-import com.google.common.base.Preconditions;
+import java.util.Map;
 
+/**
+ * Listener for {@link WorkerDoneEvent} which also aggregates all aggregators
+ * from iteration tasks and signals the end of the superstep.
+ */
 public class SyncEventHandler implements EventListener<TaskEvent> {
-	
+
 	private final ClassLoader userCodeClassLoader;
-	
+
 	private final Map<String, Aggregator<?>> aggregators;
 
 	private final int numberOfEventsUntilEndOfSuperstep;
 
 	private int workerDoneEventCounter;
-	
-	private boolean endOfSuperstep;
 
+	private boolean endOfSuperstep;
 
 	public SyncEventHandler(int numberOfEventsUntilEndOfSuperstep, Map<String, Aggregator<?>> aggregators, ClassLoader userCodeClassLoader) {
 		Preconditions.checkArgument(numberOfEventsUntilEndOfSuperstep > 0);
@@ -61,7 +63,7 @@ public class SyncEventHandler implements EventListener<TaskEvent> {
 		if (this.endOfSuperstep) {
 			throw new RuntimeException("Encountered WorderDoneEvent when still in End-of-Superstep status.");
 		}
-		
+
 		workerDoneEventCounter++;
 
 		String[] aggNames = workerDoneEvent.getAggregatorNames();
@@ -70,7 +72,7 @@ public class SyncEventHandler implements EventListener<TaskEvent> {
 		if (aggNames.length != aggregates.length) {
 			throw new RuntimeException("Inconsistent WorkerDoneEvent received!");
 		}
-		
+
 		for (int i = 0; i < aggNames.length; i++) {
 			@SuppressWarnings("unchecked")
 			Aggregator<Value> aggregator = (Aggregator<Value>) this.aggregators.get(aggNames[i]);
@@ -82,11 +84,11 @@ public class SyncEventHandler implements EventListener<TaskEvent> {
 			Thread.currentThread().interrupt();
 		}
 	}
-	
+
 	public boolean isEndOfSuperstep() {
 		return this.endOfSuperstep;
 	}
-	
+
 	public void resetEndOfSuperstep() {
 		this.endOfSuperstep = false;
 	}

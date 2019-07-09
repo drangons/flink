@@ -18,12 +18,13 @@
 
 package org.apache.flink.api.scala.io
 
-import com.google.common.base.Charsets
-import com.google.common.io.Files
+import java.util.Locale
+
 import org.apache.flink.api.scala._
 import org.apache.flink.core.fs.FileSystem.WriteMode
-import org.apache.flink.test.util.{TestBaseUtils, MultipleProgramsTestBase}
+import org.apache.flink.test.util.{MultipleProgramsTestBase, TestBaseUtils}
 import org.apache.flink.test.util.MultipleProgramsTestBase.TestExecutionMode
+import org.apache.flink.util.FileUtils
 import org.junit.Assert._
 import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
@@ -51,7 +52,7 @@ class ScalaCsvReaderWithPOJOITCase(mode: TestExecutionMode) extends MultipleProg
 
   def createInputData(data: String): String = {
     val dataFile = tempFolder.newFile("data")
-    Files.write(data, dataFile, Charsets.UTF_8)
+    FileUtils.writeFileUtf8(dataFile, data)
     dataFile.toURI.toString
   }
 
@@ -120,5 +121,5 @@ class POJOItem(var f1: String, var f2: Double, var f3: Int) {
     this("", 0.0, 0)
   }
 
-  override def toString: String = "%s,%.02f,%d".format(f1, f2, f3)
+  override def toString: String = "%s,%.02f,%d".formatLocal(Locale.US, f1, f2, f3)
 }

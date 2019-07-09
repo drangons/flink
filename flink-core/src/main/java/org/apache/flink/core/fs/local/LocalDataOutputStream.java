@@ -18,49 +18,33 @@
 
 package org.apache.flink.core.fs.local;
 
+import org.apache.flink.annotation.Internal;
+import org.apache.flink.core.fs.FSDataOutputStream;
+
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
-
-import org.apache.flink.core.fs.FSDataOutputStream;
 
 /**
  * The <code>LocalDataOutputStream</code> class is a wrapper class for a data
  * output stream to the local file system.
  */
+@Internal
 public class LocalDataOutputStream extends FSDataOutputStream {
 
-	private static final int MAX_OPEN_TRIES = 3;
-	
-	/**
-	 * The file output stream used to write data.
-	 */
-	private FileOutputStream fos;
+	/** The file output stream used to write data.*/
+	private final FileOutputStream fos;
 
 	/**
 	 * Constructs a new <code>LocalDataOutputStream</code> object from a given {@link File} object.
-	 * 
+	 *
 	 * @param file
 	 *        the {@link File} object the data stream is read from
 	 * @throws IOException
 	 *         thrown if the data output stream cannot be created
 	 */
 	public LocalDataOutputStream(final File file) throws IOException {
-		// we allow multiple tries to create the file, to increase resilience against spurious I/O failures
-		
-		FileNotFoundException lastException = null;
-		
-		for (int attempt = 0; attempt < MAX_OPEN_TRIES; attempt++) {
-			try {
-				this.fos = new FileOutputStream(file);
-				return;
-			}
-			catch (FileNotFoundException e) {
-				lastException = e;
-			}
-		}
-		throw lastException;
+		this.fos = new FileOutputStream(file);
 	}
 
 	@Override
@@ -78,7 +62,6 @@ public class LocalDataOutputStream extends FSDataOutputStream {
 		fos.close();
 	}
 
-
 	@Override
 	public void flush() throws IOException {
 		fos.flush();
@@ -87,5 +70,10 @@ public class LocalDataOutputStream extends FSDataOutputStream {
 	@Override
 	public void sync() throws IOException {
 		fos.getFD().sync();
+	}
+
+	@Override
+	public long getPos() throws IOException {
+		return fos.getChannel().position();
 	}
 }

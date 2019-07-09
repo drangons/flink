@@ -18,50 +18,109 @@
 
 package org.apache.flink.runtime.state.filesystem;
 
+import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
-import org.apache.flink.core.fs.FSDataOutputStream;
+import org.apache.flink.configuration.CheckpointingOptions;
+import org.apache.flink.configuration.Configuration;
+import org.apache.flink.core.fs.CloseableRegistry;
 import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.core.fs.Path;
-import org.apache.flink.runtime.state.StateHandle;
-import org.apache.flink.runtime.state.StateBackend;
+import org.apache.flink.metrics.MetricGroup;
+import org.apache.flink.runtime.execution.Environment;
+import org.apache.flink.runtime.query.TaskKvStateRegistry;
+import org.apache.flink.runtime.state.AbstractKeyedStateBackend;
+import org.apache.flink.runtime.state.AbstractStateBackend;
+import org.apache.flink.runtime.state.BackendBuildingException;
+import org.apache.flink.runtime.state.CheckpointStorage;
+import org.apache.flink.runtime.state.ConfigurableStateBackend;
+import org.apache.flink.runtime.state.DefaultOperatorStateBackendBuilder;
+import org.apache.flink.runtime.state.KeyGroupRange;
+import org.apache.flink.runtime.state.KeyedStateHandle;
+import org.apache.flink.runtime.state.LocalRecoveryConfig;
+import org.apache.flink.runtime.state.OperatorStateBackend;
+import org.apache.flink.runtime.state.OperatorStateHandle;
+import org.apache.flink.runtime.state.TaskStateManager;
+import org.apache.flink.runtime.state.heap.HeapKeyedStateBackendBuilder;
+import org.apache.flink.runtime.state.heap.HeapPriorityQueueSetFactory;
+import org.apache.flink.runtime.state.ttl.TtlTimeProvider;
+import org.apache.flink.util.TernaryBoolean;
 
-import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
+
 import java.io.IOException;
-import java.io.ObjectOutputStream;
-import java.io.Serializable;
 import java.net.URI;
-import java.net.URISyntaxException;
-import java.util.UUID;
+import java.util.Collection;
+
+import static org.apache.flink.util.Preconditions.checkArgument;
+import static org.apache.flink.util.Preconditions.checkNotNull;
 
 /**
- * The file state backend is a state backend that stores the state of streaming jobs in a file system.
- * 
- * <p>The state backend has one core directory into which it puts all checkpoint data. Inside that
- * directory, it creates a directory per job, inside which each checkpoint gets a directory, with
- * files for each state, for example:
- * 
- * {@code hdfs://namenode:port/flink-checkpoints/<job-id>/chk-17/6ba7b810-9dad-11d1-80b4-00c04fd430c8 }
+ * This state backend holds the working state in the memory (JVM heap) of the TaskManagers.
+ * The state backend checkpoints state as files to a file system (hence the backend's name).
+ *
+ * <p>Each checkpoint individually will store all its files in a subdirectory that includes the
+ * checkpoint number, such as {@code hdfs://namenode:port/flink-checkpoints/chk-17/}.
+ *
+ * <h1>State Size Considerations</h1>
+ *
+ * <p>Working state is kept on the TaskManager heap. If a TaskManager executes multiple
+ * tasks concurrently (if the TaskManager has multiple slots, or if slot-sharing is used)
+ * then the aggregate state of all tasks needs to fit into that TaskManager's memory.
+ *
+ * <p>This state backend stores small state chunks directly with the metadata, to avoid creating
+ * many small files. The threshold for that is configurable. When increasing this threshold, the
+ * size of the checkpoint metadata increases. The checkpoint metadata of all retained completed
+ * checkpoints needs to fit into the JobManager's heap memory. This is typically not a problem,
+ * unless the threshold {@link #getMinFileSizeThreshold()} is increased significantly.
+ *
+ * <h1>Persistence Guarantees</h1>
+ *
+ * <p>Checkpoints from this state backend are as persistent and available as filesystem that is written to.
+ * If the file system is a persistent distributed file system, this state backend supports
+ * highly available setups. The backend additionally supports savepoints and externalized checkpoints.
+ *
+ * <h1>Configuration</h1>
+ *
+ * <p>As for all state backends, this backend can either be configured within the application (by creating
+ * the backend with the respective constructor parameters and setting it on the execution environment)
+ * or by specifying it in the Flink configuration.
+ *
+ * <p>If the state backend was specified in the application, it may pick up additional configuration
+ * parameters from the Flink configuration. For example, if the backend if configured in the application
+ * without a default savepoint directory, it will pick up a default savepoint directory specified in the
+ * Flink configuration of the running job/cluster. That behavior is implemented via the
+ * {@link #configure(Configuration, ClassLoader)} method.
  */
-public class FsStateBackend extends StateBackend<FsStateBackend> {
+@PublicEvolving
+public class FsStateBackend extends AbstractFileStateBackend implements ConfigurableStateBackend {
 
 	private static final long serialVersionUID = -8191916350224044011L;
-	
-	private static final Logger LOG = LoggerFactory.getLogger(FsStateBackend.class);
-	
-	
-	/** The path to the directory for the checkpoint data, including the file system
-	 * description via scheme and optional authority */
-	private final Path basePath;
-	
-	/** The directory (job specific) into this initialized instance of the backend stores its data */
-	private transient Path checkpointDirectory;
-	
-	/** Cached handle to the file system for file operations */
-	private transient FileSystem filesystem;
 
+	/** Maximum size of state that is stored with the metadata, rather than in files (1 MiByte). */
+	private static final int MAX_FILE_STATE_THRESHOLD = 1024 * 1024;
+
+	// ------------------------------------------------------------------------
+
+	/** State below this size will be stored as part of the metadata, rather than in files.
+	 * A value of '-1' means not yet configured, in which case the default will be used. */
+	private final int fileStateThreshold;
+
+	/** Switch to chose between synchronous and asynchronous snapshots.
+	 * A value of 'undefined' means not yet configured, in which case the default will be used. */
+	private final TernaryBoolean asynchronousSnapshots;
+
+	/**
+	 * The write buffer size for created checkpoint stream, this should not be less than file state threshold when we want
+	 * state below that threshold stored as part of metadata not files.
+	 * A value of '-1' means not yet configured, in which case the default will be used.
+	 * */
+	private final int writeBufferSize;
+
+	// -----------------------------------------------------------------------
 
 	/**
 	 * Creates a new state backend that stores its checkpoint data in the file system and location
@@ -75,10 +134,9 @@ public class FsStateBackend extends StateBackend<FsStateBackend> {
 	 * classpath.
 	 *
 	 * @param checkpointDataUri The URI describing the filesystem (scheme and optionally authority),
-	 *                          and the path to teh checkpoint data directory.
-	 * @throws IOException Thrown, if no file system can be found for the scheme in the URI.
+	 *                          and the path to the checkpoint data directory.
 	 */
-	public FsStateBackend(String checkpointDataUri) throws IOException {
+	public FsStateBackend(String checkpointDataUri) {
 		this(new Path(checkpointDataUri));
 	}
 
@@ -94,319 +152,408 @@ public class FsStateBackend extends StateBackend<FsStateBackend> {
 	 * classpath.
 	 *
 	 * @param checkpointDataUri The URI describing the filesystem (scheme and optionally authority),
-	 *                          and the path to teh checkpoint data directory.
-	 * @throws IOException Thrown, if no file system can be found for the scheme in the URI.
+	 *                          and the path to the checkpoint data directory.
+	 * @param asynchronousSnapshots Switch to enable asynchronous snapshots.
 	 */
-	public FsStateBackend(Path checkpointDataUri) throws IOException {
+	public FsStateBackend(String checkpointDataUri, boolean asynchronousSnapshots) {
+		this(new Path(checkpointDataUri), asynchronousSnapshots);
+	}
+
+	/**
+	 * Creates a new state backend that stores its checkpoint data in the file system and location
+	 * defined by the given URI.
+	 *
+	 * <p>A file system for the file system scheme in the URI (e.g., 'file://', 'hdfs://', or 'S3://')
+	 * must be accessible via {@link FileSystem#get(URI)}.
+	 *
+	 * <p>For a state backend targeting HDFS, this means that the URI must either specify the authority
+	 * (host and port), or that the Hadoop configuration that describes that information must be in the
+	 * classpath.
+	 *
+	 * @param checkpointDataUri The URI describing the filesystem (scheme and optionally authority),
+	 *                          and the path to the checkpoint data directory.
+	 */
+	public FsStateBackend(Path checkpointDataUri) {
 		this(checkpointDataUri.toUri());
 	}
 
 	/**
 	 * Creates a new state backend that stores its checkpoint data in the file system and location
 	 * defined by the given URI.
-	 * 
+	 *
 	 * <p>A file system for the file system scheme in the URI (e.g., 'file://', 'hdfs://', or 'S3://')
 	 * must be accessible via {@link FileSystem#get(URI)}.
-	 * 
+	 *
 	 * <p>For a state backend targeting HDFS, this means that the URI must either specify the authority
 	 * (host and port), or that the Hadoop configuration that describes that information must be in the
 	 * classpath.
-	 * 
+	 *
 	 * @param checkpointDataUri The URI describing the filesystem (scheme and optionally authority),
-	 *                          and the path to teh checkpoint data directory.
-	 * @throws IOException Thrown, if no file system can be found for the scheme in the URI.
+	 *                          and the path to the checkpoint data directory.
+	 * @param asynchronousSnapshots Switch to enable asynchronous snapshots.
 	 */
-	public FsStateBackend(URI checkpointDataUri) throws IOException {
-		final String scheme = checkpointDataUri.getScheme();
-		final String path = checkpointDataUri.getPath();
-		
-		// some validity checks
-		if (scheme == null) {
-			throw new IllegalArgumentException("The scheme (hdfs://, file://, etc) is null. " +
-					"Please specify the file system scheme explicitly in the URI.");
-		}
-		if (path == null) {
-			throw new IllegalArgumentException("The path to store the checkpoint data in is null. " +
-					"Please specify a directory path for the checkpoint data.");
-		}
-		if (path.length() == 0 || path.equals("/")) {
-			throw new IllegalArgumentException("Cannot use the root directory for checkpoints.");
-		}
-		
-		// we do a bit of work to make sure that the URI for the filesystem refers to exactly the same
-		// (distributed) filesystem on all hosts and includes full host/port information, even if the
-		// original URI did not include that. We count on the filesystem loading from the configuration
-		// to fill in the missing data.
-		
-		// try to grab the file system for this path/URI
-		this.filesystem = FileSystem.get(checkpointDataUri);
-		if (this.filesystem == null) {
-			throw new IOException("Could not find a file system for the given scheme in the available configurations.");
-		}
-
-		URI fsURI = this.filesystem.getUri();
-		try {
-			URI baseURI = new URI(fsURI.getScheme(), fsURI.getAuthority(), path, null, null);
-			this.basePath = new Path(baseURI);
-		}
-		catch (URISyntaxException e) {
-			throw new IOException(
-					String.format("Cannot create file system URI for checkpointDataUri %s and filesystem URI %s", 
-							checkpointDataUri, fsURI), e);
-		}
+	public FsStateBackend(Path checkpointDataUri, boolean asynchronousSnapshots) {
+		this(checkpointDataUri.toUri(), asynchronousSnapshots);
 	}
 
 	/**
-	 * Gets the base directory where all state-containing files are stored.
-	 * The job specific directory is created inside this directory.
-	 * 
-	 * @return The base directory.
+	 * Creates a new state backend that stores its checkpoint data in the file system and location
+	 * defined by the given URI.
+	 *
+	 * <p>A file system for the file system scheme in the URI (e.g., 'file://', 'hdfs://', or 'S3://')
+	 * must be accessible via {@link FileSystem#get(URI)}.
+	 *
+	 * <p>For a state backend targeting HDFS, this means that the URI must either specify the authority
+	 * (host and port), or that the Hadoop configuration that describes that information must be in the
+	 * classpath.
+	 *
+	 * @param checkpointDataUri The URI describing the filesystem (scheme and optionally authority),
+	 *                          and the path to the checkpoint data directory.
 	 */
-	public Path getBasePath() {
-		return basePath;
+	public FsStateBackend(URI checkpointDataUri) {
+		this(checkpointDataUri, null, -1, -1, TernaryBoolean.UNDEFINED);
 	}
 
 	/**
-	 * Gets the directory where this state backend stores its checkpoint data. Will be null if
-	 * the state backend has not been initialized.
-	 * 
-	 * @return The directory where this state backend stores its checkpoint data.
+	 * Creates a new state backend that stores its checkpoint data in the file system and location
+	 * defined by the given URI. Optionally, this constructor accepts a default savepoint storage
+	 * directory to which savepoints are stored when no custom target path is give to the savepoint
+	 * command.
+	 *
+	 * <p>A file system for the file system scheme in the URI (e.g., 'file://', 'hdfs://', or 'S3://')
+	 * must be accessible via {@link FileSystem#get(URI)}.
+	 *
+	 * <p>For a state backend targeting HDFS, this means that the URI must either specify the authority
+	 * (host and port), or that the Hadoop configuration that describes that information must be in the
+	 * classpath.
+	 *
+	 * @param checkpointDataUri The URI describing the filesystem (scheme and optionally authority),
+	 *                          and the path to the checkpoint data directory.
+	 * @param defaultSavepointDirectory The default directory to store savepoints to. May be null.
 	 */
-	public Path getCheckpointDirectory() {
-		return checkpointDirectory;
+	public FsStateBackend(URI checkpointDataUri, @Nullable URI defaultSavepointDirectory) {
+		this(checkpointDataUri, defaultSavepointDirectory, -1, -1, TernaryBoolean.UNDEFINED);
 	}
 
 	/**
-	 * Checks whether this state backend is initialized. Note that initialization does not carry
-	 * across serialization. After each serialization, the state backend needs to be initialized.
-	 * 
-	 * @return True, if the file state backend has been initialized, false otherwise.
+	 * Creates a new state backend that stores its checkpoint data in the file system and location
+	 * defined by the given URI.
+	 *
+	 * <p>A file system for the file system scheme in the URI (e.g., 'file://', 'hdfs://', or 'S3://')
+	 * must be accessible via {@link FileSystem#get(URI)}.
+	 *
+	 * <p>For a state backend targeting HDFS, this means that the URI must either specify the authority
+	 * (host and port), or that the Hadoop configuration that describes that information must be in the
+	 * classpath.
+	 *
+	 * @param checkpointDataUri The URI describing the filesystem (scheme and optionally authority),
+	 *                          and the path to the checkpoint data directory.
+	 * @param asynchronousSnapshots Switch to enable asynchronous snapshots.
 	 */
-	public boolean isInitialized() {
-		return filesystem != null && checkpointDirectory != null; 
+	public FsStateBackend(URI checkpointDataUri, boolean asynchronousSnapshots) {
+		this(checkpointDataUri, null, -1, -1,
+				TernaryBoolean.fromBoolean(asynchronousSnapshots));
 	}
 
 	/**
-	 * Gets the file system handle for the file system that stores the state for this backend.
-	 * 
-	 * @return This backend's file system handle.
+	 * Creates a new state backend that stores its checkpoint data in the file system and location
+	 * defined by the given URI.
+	 *
+	 * <p>A file system for the file system scheme in the URI (e.g., 'file://', 'hdfs://', or 'S3://')
+	 * must be accessible via {@link FileSystem#get(URI)}.
+	 *
+	 * <p>For a state backend targeting HDFS, this means that the URI must either specify the authority
+	 * (host and port), or that the Hadoop configuration that describes that information must be in the
+	 * classpath.
+	 *
+	 * @param checkpointDataUri The URI describing the filesystem (scheme and optionally authority),
+	 *                          and the path to the checkpoint data directory.
+	 * @param fileStateSizeThreshold State up to this size will be stored as part of the metadata,
+	 *                             rather than in files
 	 */
-	public FileSystem getFileSystem() {
-		if (filesystem != null) {
-			return filesystem;
+	public FsStateBackend(URI checkpointDataUri, int fileStateSizeThreshold) {
+		this(checkpointDataUri, null, fileStateSizeThreshold, -1, TernaryBoolean.UNDEFINED);
+	}
+
+	/**
+	 * Creates a new state backend that stores its checkpoint data in the file system and location
+	 * defined by the given URI.
+	 *
+	 * <p>A file system for the file system scheme in the URI (e.g., 'file://', 'hdfs://', or 'S3://')
+	 * must be accessible via {@link FileSystem#get(URI)}.
+	 *
+	 * <p>For a state backend targeting HDFS, this means that the URI must either specify the authority
+	 * (host and port), or that the Hadoop configuration that describes that information must be in the
+	 * classpath.
+	 *
+	 * @param checkpointDataUri The URI describing the filesystem (scheme and optionally authority),
+	 *                          and the path to the checkpoint data directory.
+	 * @param fileStateSizeThreshold State up to this size will be stored as part of the metadata,
+	 *                             rather than in files (-1 for default value).
+	 * @param asynchronousSnapshots Switch to enable asynchronous snapshots.
+	 */
+	public FsStateBackend(
+			URI checkpointDataUri,
+			int fileStateSizeThreshold,
+			boolean asynchronousSnapshots) {
+
+		this(checkpointDataUri, null, fileStateSizeThreshold, -1,
+				TernaryBoolean.fromBoolean(asynchronousSnapshots));
+	}
+
+	/**
+	 * Creates a new state backend that stores its checkpoint data in the file system and location
+	 * defined by the given URI.
+	 *
+	 * <p>A file system for the file system scheme in the URI (e.g., 'file://', 'hdfs://', or 'S3://')
+	 * must be accessible via {@link FileSystem#get(URI)}.
+	 *
+	 * <p>For a state backend targeting HDFS, this means that the URI must either specify the authority
+	 * (host and port), or that the Hadoop configuration that describes that information must be in the
+	 * classpath.
+	 *
+	 * @param checkpointDirectory        The path to write checkpoint metadata to.
+	 * @param defaultSavepointDirectory  The path to write savepoints to. If null, the value from
+	 *                                   the runtime configuration will be used, or savepoint
+	 *                                   target locations need to be passed when triggering a savepoint.
+	 * @param fileStateSizeThreshold     State below this size will be stored as part of the metadata,
+	 *                                   rather than in files. If -1, the value configured in the
+	 *                                   runtime configuration will be used, or the default value (1KB)
+	 *                                   if nothing is configured.
+	 * @param writeBufferSize            Write buffer size used to serialize state. If -1, the value configured in the
+	 *                                   runtime configuration will be used, or the default value (4KB)
+	 *                                   if nothing is configured.
+	 * @param asynchronousSnapshots      Flag to switch between synchronous and asynchronous
+	 *                                   snapshot mode. If UNDEFINED, the value configured in the
+	 *                                   runtime configuration will be used.
+	 */
+	public FsStateBackend(
+			URI checkpointDirectory,
+			@Nullable URI defaultSavepointDirectory,
+			int fileStateSizeThreshold,
+			int writeBufferSize,
+			TernaryBoolean asynchronousSnapshots) {
+
+		super(checkNotNull(checkpointDirectory, "checkpoint directory is null"), defaultSavepointDirectory);
+
+		checkNotNull(asynchronousSnapshots, "asynchronousSnapshots");
+		checkArgument(fileStateSizeThreshold >= -1 && fileStateSizeThreshold <= MAX_FILE_STATE_THRESHOLD,
+				"The threshold for file state size must be in [-1, %s], where '-1' means to use " +
+						"the value from the deployment's configuration.", MAX_FILE_STATE_THRESHOLD);
+		checkArgument(writeBufferSize >= -1 ,
+			"The write buffer size must be not less than '-1', where '-1' means to use " +
+				"the value from the deployment's configuration.");
+
+		this.fileStateThreshold = fileStateSizeThreshold;
+		this.writeBufferSize = writeBufferSize;
+		this.asynchronousSnapshots = asynchronousSnapshots;
+	}
+
+	/**
+	 * Private constructor that creates a re-configured copy of the state backend.
+	 *
+	 * @param original The state backend to re-configure
+	 * @param configuration The configuration
+	 */
+	private FsStateBackend(FsStateBackend original, Configuration configuration, ClassLoader classLoader) {
+		super(original.getCheckpointPath(), original.getSavepointPath(), configuration);
+
+		// if asynchronous snapshots were configured, use that setting,
+		// else check the configuration
+		this.asynchronousSnapshots = original.asynchronousSnapshots.resolveUndefined(
+				configuration.getBoolean(CheckpointingOptions.ASYNC_SNAPSHOTS));
+
+		final int sizeThreshold = original.fileStateThreshold >= 0 ?
+				original.fileStateThreshold :
+				configuration.getInteger(CheckpointingOptions.FS_SMALL_FILE_THRESHOLD);
+
+		if (sizeThreshold >= 0 && sizeThreshold <= MAX_FILE_STATE_THRESHOLD) {
+			this.fileStateThreshold = sizeThreshold;
 		}
 		else {
-			throw new IllegalStateException("State backend has not been initialized.");
+			this.fileStateThreshold = CheckpointingOptions.FS_SMALL_FILE_THRESHOLD.defaultValue();
+
+			// because this is the only place we (unlikely) ever log, we lazily
+			// create the logger here
+			LoggerFactory.getLogger(AbstractFileStateBackend.class).warn(
+					"Ignoring invalid file size threshold value ({}): {} - using default value {} instead.",
+					CheckpointingOptions.FS_SMALL_FILE_THRESHOLD.key(), sizeThreshold,
+					CheckpointingOptions.FS_SMALL_FILE_THRESHOLD.defaultValue());
 		}
+
+		final int bufferSize = original.writeBufferSize >= 0 ?
+			original.writeBufferSize :
+			configuration.getInteger(CheckpointingOptions.FS_WRITE_BUFFER_SIZE);
+
+		this.writeBufferSize = Math.max(bufferSize, this.fileStateThreshold);
+	}
+
+	// ------------------------------------------------------------------------
+	//  Properties
+	// ------------------------------------------------------------------------
+
+	/**
+	 * Gets the base directory where all the checkpoints are stored.
+	 * The job-specific checkpoint directory is created inside this directory.
+	 *
+	 * @return The base directory for checkpoints.
+	 *
+	 * @deprecated Deprecated in favor of {@link #getCheckpointPath()}.
+	 */
+	@Deprecated
+	public Path getBasePath() {
+		return getCheckpointPath();
+	}
+
+	/**
+	 * Gets the base directory where all the checkpoints are stored.
+	 * The job-specific checkpoint directory is created inside this directory.
+	 *
+	 * @return The base directory for checkpoints.
+	 */
+	@Nonnull
+	@Override
+	public Path getCheckpointPath() {
+		// we know that this can never be null by the way of constructor checks
+		//noinspection ConstantConditions
+		return super.getCheckpointPath();
+	}
+
+	/**
+	 * Gets the threshold below which state is stored as part of the metadata, rather than in files.
+	 * This threshold ensures that the backend does not create a large amount of very small files,
+	 * where potentially the file pointers are larger than the state itself.
+	 *
+	 * <p>If not explicitly configured, this is the default value of
+	 * {@link CheckpointingOptions#FS_SMALL_FILE_THRESHOLD}.
+	 *
+	 * @return The file size threshold, in bytes.
+	 */
+	public int getMinFileSizeThreshold() {
+		return fileStateThreshold >= 0 ?
+				fileStateThreshold :
+				CheckpointingOptions.FS_SMALL_FILE_THRESHOLD.defaultValue();
+	}
+
+	/**
+	 * Gets the write buffer size for created checkpoint stream.
+	 *
+	 * <p>If not explicitly configured, this is the default value of
+	 * {@link CheckpointingOptions#FS_WRITE_BUFFER_SIZE}.
+	 *
+	 * @return The write buffer size, in bytes.
+	 */
+	public int getWriteBufferSize() {
+		return writeBufferSize >= 0 ?
+			writeBufferSize :
+			CheckpointingOptions.FS_WRITE_BUFFER_SIZE.defaultValue();
+	}
+
+	/**
+	 * Gets whether the key/value data structures are asynchronously snapshotted.
+	 *
+	 * <p>If not explicitly configured, this is the default value of
+	 * {@link CheckpointingOptions#ASYNC_SNAPSHOTS}.
+	 */
+	public boolean isUsingAsynchronousSnapshots() {
+		return asynchronousSnapshots.getOrDefault(CheckpointingOptions.ASYNC_SNAPSHOTS.defaultValue());
+	}
+
+	// ------------------------------------------------------------------------
+	//  Reconfiguration
+	// ------------------------------------------------------------------------
+
+	/**
+	 * Creates a copy of this state backend that uses the values defined in the configuration
+	 * for fields where that were not specified in this state backend.
+	 *
+	 * @param config the configuration
+	 * @return The re-configured variant of the state backend
+	 */
+	@Override
+	public FsStateBackend configure(Configuration config, ClassLoader classLoader) {
+		return new FsStateBackend(this, config, classLoader);
 	}
 
 	// ------------------------------------------------------------------------
 	//  initialization and cleanup
 	// ------------------------------------------------------------------------
-	
-	@Override
-	public void initializeForJob(JobID jobId) throws Exception {
-		Path dir = new Path(basePath, jobId.toString());
-		
-		LOG.info("Initializing file state backend to URI " + dir);
-		
-		filesystem = basePath.getFileSystem();
-		filesystem.mkdirs(dir);
 
-		checkpointDirectory = dir;
+	@Override
+	public CheckpointStorage createCheckpointStorage(JobID jobId) throws IOException {
+		checkNotNull(jobId, "jobId");
+		return new FsCheckpointStorage(
+			getCheckpointPath(),
+			getSavepointPath(),
+			jobId,
+			getMinFileSizeThreshold(),
+			getWriteBufferSize());
 	}
-
-	@Override
-	public void disposeAllStateForCurrentJob() throws Exception {
-		FileSystem fs = this.filesystem;
-		Path dir = this.checkpointDirectory;
-		
-		if (fs != null && dir != null) {
-			this.filesystem = null;
-			this.checkpointDirectory = null;
-			fs.delete(dir, true);
-		}
-		else {
-			throw new IllegalStateException("state backend has not been initialized");
-		}
-	}
-
-	@Override
-	public void close() throws Exception {}
 
 	// ------------------------------------------------------------------------
-	//  state backend operations
+	//  state holding structures
 	// ------------------------------------------------------------------------
-	
+
 	@Override
-	public <K, V> FsHeapKvState<K, V> createKvState(
-			TypeSerializer<K> keySerializer, TypeSerializer<V> valueSerializer, V defaultValue) throws Exception {
-		return new FsHeapKvState<K, V>(keySerializer, valueSerializer, defaultValue, this);
+	public <K> AbstractKeyedStateBackend<K> createKeyedStateBackend(
+		Environment env,
+		JobID jobID,
+		String operatorIdentifier,
+		TypeSerializer<K> keySerializer,
+		int numberOfKeyGroups,
+		KeyGroupRange keyGroupRange,
+		TaskKvStateRegistry kvStateRegistry,
+		TtlTimeProvider ttlTimeProvider,
+		MetricGroup metricGroup,
+		@Nonnull Collection<KeyedStateHandle> stateHandles,
+		CloseableRegistry cancelStreamRegistry) throws BackendBuildingException {
+
+		TaskStateManager taskStateManager = env.getTaskStateManager();
+		LocalRecoveryConfig localRecoveryConfig = taskStateManager.createLocalRecoveryConfig();
+		HeapPriorityQueueSetFactory priorityQueueSetFactory =
+			new HeapPriorityQueueSetFactory(keyGroupRange, numberOfKeyGroups, 128);
+
+		return new HeapKeyedStateBackendBuilder<>(
+			kvStateRegistry,
+			keySerializer,
+			env.getUserClassLoader(),
+			numberOfKeyGroups,
+			keyGroupRange,
+			env.getExecutionConfig(),
+			ttlTimeProvider,
+			stateHandles,
+			AbstractStateBackend.getCompressionDecorator(env.getExecutionConfig()),
+			localRecoveryConfig,
+			priorityQueueSetFactory,
+			isUsingAsynchronousSnapshots(),
+			cancelStreamRegistry).build();
 	}
 
 	@Override
-	public <S extends Serializable> StateHandle<S> checkpointStateSerializable(
-			S state, long checkpointID, long timestamp) throws Exception
-	{
-		checkFileSystemInitialized();
+	public OperatorStateBackend createOperatorStateBackend(
+		Environment env,
+		String operatorIdentifier,
+		@Nonnull Collection<OperatorStateHandle> stateHandles,
+		CloseableRegistry cancelStreamRegistry) throws BackendBuildingException {
 
-		// make sure the directory for that specific checkpoint exists
-		final Path checkpointDir = createCheckpointDirPath(checkpointID);
-		filesystem.mkdirs(checkpointDir);
-
-		
-		Exception latestException = null;
-
-		for (int attempt = 0; attempt < 10; attempt++) {
-			Path targetPath = new Path(checkpointDir, UUID.randomUUID().toString());
-			FSDataOutputStream outStream;
-			try {
-				outStream = filesystem.create(targetPath, false);
-			}
-			catch (Exception e) {
-				latestException = e;
-				continue;
-			}
-
-			ObjectOutputStream os = new ObjectOutputStream(outStream);
-			os.writeObject(state);
-			os.close();
-			return new FileSerializableStateHandle<S>(targetPath);
-		}
-		
-		throw new Exception("Could not open output stream for state backend", latestException);
+		return new DefaultOperatorStateBackendBuilder(
+			env.getUserClassLoader(),
+			env.getExecutionConfig(),
+			isUsingAsynchronousSnapshots(),
+			stateHandles,
+			cancelStreamRegistry).build();
 	}
-	
-	@Override
-	public FsCheckpointStateOutputStream createCheckpointStateOutputStream(long checkpointID, long timestamp) throws Exception {
-		checkFileSystemInitialized();
-		
-		final Path checkpointDir = createCheckpointDirPath(checkpointID);
-		filesystem.mkdirs(checkpointDir);
-		
-		Exception latestException = null;
-		
-		for (int attempt = 0; attempt < 10; attempt++) {
-			Path targetPath = new Path(checkpointDir, UUID.randomUUID().toString());
-			try {
-				FSDataOutputStream outStream = filesystem.create(targetPath, false);
-				return new FsCheckpointStateOutputStream(outStream, targetPath, filesystem);
-			}
-			catch (Exception e) {
-				latestException = e;
-			}
-		}
-		throw new Exception("Could not open output stream for state backend", latestException);
-	}
-	
+
 	// ------------------------------------------------------------------------
 	//  utilities
 	// ------------------------------------------------------------------------
 
-	private void checkFileSystemInitialized() throws IllegalStateException {
-		if (filesystem == null || checkpointDirectory == null) {
-			throw new IllegalStateException("filesystem has not been re-initialized after deserialization");
-		}
-	}
-	
-	private Path createCheckpointDirPath(long checkpointID) {
-		return new Path(checkpointDirectory, "chk-" + checkpointID);
-	}
-	
 	@Override
 	public String toString() {
-		return checkpointDirectory == null ?
-			"File State Backend @ " + basePath : 
-			"File State Backend (initialized) @ " + checkpointDirectory;
-	}
-	
-	// ------------------------------------------------------------------------
-	//  Output stream for state checkpointing
-	// ------------------------------------------------------------------------
-
-	/**
-	 * A CheckpointStateOutputStream that writes into a file and returns the path to that file upon
-	 * closing.
-	 */
-	public static final class FsCheckpointStateOutputStream extends CheckpointStateOutputStream {
-
-		private final FSDataOutputStream outStream;
-		
-		private final Path filePath;
-		
-		private final FileSystem fs;
-		
-		private boolean closed;
-
-		FsCheckpointStateOutputStream(FSDataOutputStream outStream, Path filePath, FileSystem fs) {
-			this.outStream = outStream;
-			this.filePath = filePath;
-			this.fs = fs;
-		}
-
-
-		@Override
-		public void write(int b) throws IOException {
-			outStream.write(b);
-		}
-
-		@Override
-		public void write(byte[] b, int off, int len) throws IOException {
-			outStream.write(b, off, len);
-		}
-
-		@Override
-		public void flush() throws IOException {
-			outStream.flush();
-		}
-
-		/**
-		 * If the stream is only closed, we remove the produced file (cleanup through the auto close
-		 * feature, for example). This method throws no exception if the deletion fails, but only
-		 * logs the error.
-		 */
-		@Override
-		public void close() {
-			synchronized (this) {
-				if (!closed) {
-					closed = true;
-					try {
-						outStream.close();
-						fs.delete(filePath, false);
-						
-						// attempt to delete the parent (will fail and be ignored if the parent has more files)
-						try {
-							fs.delete(filePath.getParent(), false);
-						} catch (IOException ignored) {}
-					}
-					catch (Exception e) {
-						LOG.warn("Cannot delete closed and discarded state stream to " + filePath, e);
-					}
-				}
-			}
-		}
-
-		@Override
-		public FileStreamStateHandle closeAndGetHandle() throws IOException {
-			return new FileStreamStateHandle(closeAndGetPath());
-		}
-
-		/**
-		 * Closes the stream and returns the path to the file that contains the stream's data.
-		 * @return The path to the file that contains the stream's data.
-		 * @throws IOException Thrown if the stream cannot be successfully closed.
-		 */
-		public Path closeAndGetPath() throws IOException {
-			synchronized (this) {
-				if (!closed) {
-					closed = true;
-					outStream.close();
-					return filePath;
-				}
-				else {
-					throw new IOException("Stream has already been closed and discarded.");
-				}
-			}
-		}
+		return "File State Backend (" +
+				"checkpoints: '" + getCheckpointPath() +
+				"', savepoints: '" + getSavepointPath() +
+				"', asynchronous: " + asynchronousSnapshots +
+				", fileStateThreshold: " + fileStateThreshold + ")";
 	}
 }

@@ -24,22 +24,22 @@ import org.apache.flink.graph.Edge;
 import org.apache.flink.graph.Graph;
 import org.apache.flink.graph.GraphAlgorithm;
 import org.apache.flink.graph.Vertex;
+import org.apache.flink.graph.spargel.GatherFunction;
 import org.apache.flink.graph.spargel.MessageIterator;
-import org.apache.flink.graph.spargel.MessagingFunction;
-import org.apache.flink.graph.spargel.VertexUpdateFunction;
+import org.apache.flink.graph.spargel.ScatterFunction;
 
 /**
- * This is an implementation of the Single-Source-Shortest Paths algorithm, using a vertex-centric iteration.
+ * This is an implementation of the Single-Source-Shortest Paths algorithm, using a scatter-gather iteration.
  */
 @SuppressWarnings("serial")
-public class SingleSourceShortestPaths<K> implements GraphAlgorithm<K, Double, Double, DataSet<Vertex<K, Double>>> {
+public class SingleSourceShortestPaths<K, VV> implements GraphAlgorithm<K, VV, Double, DataSet<Vertex<K, Double>>> {
 
 	private final K srcVertexId;
 	private final Integer maxIterations;
 
 	/**
 	 * Creates an instance of the SingleSourceShortestPaths algorithm.
-	 * 
+	 *
 	 * @param srcVertexId The ID of the source vertex.
 	 * @param maxIterations The maximum number of iterations to run.
 	 */
@@ -49,14 +49,14 @@ public class SingleSourceShortestPaths<K> implements GraphAlgorithm<K, Double, D
 	}
 
 	@Override
-	public DataSet<Vertex<K, Double>> run(Graph<K, Double, Double> input) {
+	public DataSet<Vertex<K, Double>> run(Graph<K, VV, Double> input) {
 
-		return input.mapVertices(new InitVerticesMapper<K>(srcVertexId))
-				.runVertexCentricIteration(new VertexDistanceUpdater<K>(), new MinDistanceMessenger<K>(),
+		return input.mapVertices(new InitVerticesMapper<>(srcVertexId))
+				.runScatterGatherIteration(new MinDistanceMessenger<>(), new VertexDistanceUpdater<>(),
 				maxIterations).getVertices();
 	}
 
-	public static final class InitVerticesMapper<K>	implements MapFunction<Vertex<K, Double>, Double> {
+	private static final class InitVerticesMapper<K, VV> implements MapFunction<Vertex<K, VV>, Double> {
 
 		private K srcVertexId;
 
@@ -64,7 +64,7 @@ public class SingleSourceShortestPaths<K> implements GraphAlgorithm<K, Double, D
 			this.srcVertexId = srcId;
 		}
 
-		public Double map(Vertex<K, Double> value) {
+		public Double map(Vertex<K, VV> value) {
 			if (value.f0.equals(srcVertexId)) {
 				return 0.0;
 			} else {
@@ -74,12 +74,30 @@ public class SingleSourceShortestPaths<K> implements GraphAlgorithm<K, Double, D
 	}
 
 	/**
-	 * Function that updates the value of a vertex by picking the minimum
-	 * distance from all incoming messages.
-	 * 
+	 * Distributes the minimum distance associated with a given vertex among all
+	 * the target vertices summed up with the edge's value.
+	 *
 	 * @param <K>
 	 */
-	public static final class VertexDistanceUpdater<K> extends VertexUpdateFunction<K, Double, Double> {
+	public static final class MinDistanceMessenger<K> extends ScatterFunction<K, Double, Double, Double> {
+
+		@Override
+		public void sendMessages(Vertex<K, Double> vertex) {
+			if (vertex.getValue() < Double.POSITIVE_INFINITY) {
+				for (Edge<K, Double> edge : getEdges()) {
+					sendMessageTo(edge.getTarget(), vertex.getValue() + edge.getValue());
+				}
+			}
+		}
+	}
+
+	/**
+	 * Function that updates the value of a vertex by picking the minimum
+	 * distance from all incoming messages.
+	 *
+	 * @param <K>
+	 */
+	public static final class VertexDistanceUpdater<K> extends GatherFunction<K, Double, Double> {
 
 		@Override
 		public void updateVertex(Vertex<K, Double> vertex,
@@ -95,23 +113,6 @@ public class SingleSourceShortestPaths<K> implements GraphAlgorithm<K, Double, D
 
 			if (vertex.getValue() > minDistance) {
 				setNewVertexValue(minDistance);
-			}
-		}
-	}
-
-	/**
-	 * Distributes the minimum distance associated with a given vertex among all
-	 * the target vertices summed up with the edge's value.
-	 * 
-	 * @param <K>
-	 */
-	public static final class MinDistanceMessenger<K> extends MessagingFunction<K, Double, Double, Double> {
-
-		@Override
-		public void sendMessages(Vertex<K, Double> vertex)
-				throws Exception {
-			for (Edge<K, Double> edge : getEdges()) {
-				sendMessageTo(edge.getTarget(), vertex.getValue() + edge.getValue());
 			}
 		}
 	}

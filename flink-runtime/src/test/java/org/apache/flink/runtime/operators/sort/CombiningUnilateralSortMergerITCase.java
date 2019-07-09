@@ -18,18 +18,11 @@
 
 package org.apache.flink.runtime.operators.sort;
 
-import java.io.IOException;
-import java.util.Hashtable;
-import java.util.Iterator;
-import java.util.NoSuchElementException;
-
-import org.junit.Assert;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.flink.api.common.functions.GroupCombineFunction;
+import org.apache.flink.api.common.functions.RichGroupReduceFunction;
 import org.apache.flink.api.common.typeutils.TypeComparator;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.common.typeutils.TypeSerializerFactory;
-import org.apache.flink.api.common.functions.RichGroupReduceFunction;
 import org.apache.flink.api.common.typeutils.base.IntComparator;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.Configuration;
@@ -44,11 +37,22 @@ import org.apache.flink.runtime.operators.testutils.TestData.TupleGenerator.Valu
 import org.apache.flink.runtime.util.ReusingKeyGroupedIterator;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.MutableObjectIterator;
+import org.apache.flink.util.TestLogger;
+
 import org.junit.After;
+import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-public class CombiningUnilateralSortMergerITCase {
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Hashtable;
+import java.util.Iterator;
+import java.util.NoSuchElementException;
+
+public class CombiningUnilateralSortMergerITCase extends TestLogger {
 	
 	private static final Logger LOG = LoggerFactory.getLogger(CombiningUnilateralSortMergerITCase.class);
 
@@ -88,11 +92,8 @@ public class CombiningUnilateralSortMergerITCase {
 	}
 
 	@After
-	public void afterTest() {
-		this.ioManager.shutdown();
-		if (!this.ioManager.isProperlyShutDown()) {
-			Assert.fail("I/O Manager was not properly shut down.");
-		}
+	public void afterTest() throws Exception {
+		this.ioManager.close();
 		
 		if (this.memoryManager != null) {
 			Assert.assertTrue("Memory leak: not all segments have been returned to the memory manager.", 
@@ -116,7 +117,7 @@ public class CombiningUnilateralSortMergerITCase {
 		
 		Sorter<Tuple2<Integer, Integer>> merger = new CombiningUnilateralSortMerger<>(comb,
 				this.memoryManager, this.ioManager, reader, this.parentTask, this.serializerFactory2, this.comparator2,
-				0.25, 64, 0.7f, false);
+				0.25, 64, 0.7f, true /* use large record handler */, false);
 
 		final Tuple2<Integer, Integer> rec = new Tuple2<>();
 		rec.setField(1, 1);
@@ -155,7 +156,7 @@ public class CombiningUnilateralSortMergerITCase {
 		
 		Sorter<Tuple2<Integer, Integer>> merger = new CombiningUnilateralSortMerger<>(comb,
 				this.memoryManager, this.ioManager, reader, this.parentTask, this.serializerFactory2, this.comparator2,
-				0.01, 64, 0.005f, true);
+				0.01, 64, 0.005f, true /* use large record handler */, true);
 
 		final Tuple2<Integer, Integer> rec = new Tuple2<>();
 		rec.setField(1, 1);
@@ -182,6 +183,42 @@ public class CombiningUnilateralSortMergerITCase {
 	}
 
 	@Test
+	public void testCombineSpillingDisableObjectReuse() throws Exception {
+		int noKeys = 100;
+		int noKeyCnt = 10000;
+
+		TestData.MockTuple2Reader<Tuple2<Integer, Integer>> reader = TestData.getIntIntTupleReader();
+
+		LOG.debug("initializing sortmerger");
+
+		MaterializedCountCombiner comb = new MaterializedCountCombiner();
+
+		// set maxNumFileHandles = 2 to trigger multiple channel merging
+		Sorter<Tuple2<Integer, Integer>> merger = new CombiningUnilateralSortMerger<>(comb,
+				this.memoryManager, this.ioManager, reader, this.parentTask, this.serializerFactory2, this.comparator2,
+				0.01, 2, 0.005f, true /* use large record handler */, false);
+
+		final Tuple2<Integer, Integer> rec = new Tuple2<>();
+
+		for (int i = 0; i < noKeyCnt; i++) {
+			rec.setField(i, 0);
+			for (int j = 0; j < noKeys; j++) {
+				rec.setField(j, 1);
+				reader.emit(rec);
+			}
+		}
+		reader.close();
+
+		MutableObjectIterator<Tuple2<Integer, Integer>> iterator = merger.getIterator();
+		Iterator<Integer> result = getReducingIterator(iterator, serializerFactory2.getSerializer(), comparator2.duplicate());
+		while (result.hasNext()) {
+			Assert.assertEquals(4950, result.next().intValue());
+		}
+
+		merger.close();
+	}
+
+	@Test
 	public void testSortAndValidate() throws Exception
 	{
 		final Hashtable<Integer, Integer> countTable = new Hashtable<>(KEY_MAX);
@@ -202,7 +239,7 @@ public class CombiningUnilateralSortMergerITCase {
 		
 		Sorter<Tuple2<Integer, String>> merger = new CombiningUnilateralSortMerger<>(comb,
 				this.memoryManager, this.ioManager, reader, this.parentTask, this.serializerFactory1, this.comparator1,
-				0.25, 2, 0.7f, false);
+				0.25, 2, 0.7f, true /* use large record handler */, false);
 
 		// emit data
 		LOG.debug("emitting data");
@@ -252,7 +289,10 @@ public class CombiningUnilateralSortMergerITCase {
 
 	// --------------------------------------------------------------------------------------------
 	
-	public static class TestCountCombiner extends RichGroupReduceFunction<Tuple2<Integer, Integer>, Tuple2<Integer, Integer>> {
+	public static class TestCountCombiner
+		extends RichGroupReduceFunction<Tuple2<Integer, Integer>, Tuple2<Integer, Integer>>
+		implements GroupCombineFunction<Tuple2<Integer, Integer>, Tuple2<Integer, Integer>>
+	{
 		private static final long serialVersionUID = 1L;
 		
 		private Integer count = 0;
@@ -290,7 +330,10 @@ public class CombiningUnilateralSortMergerITCase {
 		}
 	}
 
-	public static class TestCountCombiner2 extends RichGroupReduceFunction<Tuple2<Integer, String>, Tuple2<Integer, String>> {
+	public static class TestCountCombiner2
+		extends RichGroupReduceFunction<Tuple2<Integer, String>, Tuple2<Integer, String>>
+		implements GroupCombineFunction<Tuple2<Integer, String>, Tuple2<Integer, String>>
+	{
 		private static final long serialVersionUID = 1L;
 		
 		public volatile boolean opened = false;
@@ -324,7 +367,39 @@ public class CombiningUnilateralSortMergerITCase {
 			closed = true;
 		}
 	}
-	
+
+	// --------------------------------------------------------------------------------------------
+
+	public static class MaterializedCountCombiner
+			extends RichGroupReduceFunction<Tuple2<Integer, Integer>, Tuple2<Integer, Integer>>
+			implements GroupCombineFunction<Tuple2<Integer, Integer>, Tuple2<Integer, Integer>>
+	{
+		private static final long serialVersionUID = 1L;
+
+		@Override
+		public void combine(Iterable<Tuple2<Integer, Integer>> values, Collector<Tuple2<Integer, Integer>> out) {
+			ArrayList<Tuple2<Integer, Integer>> valueList = new ArrayList<>();
+			for (Tuple2<Integer, Integer> next : values) {
+				valueList.add(next);
+			}
+
+			int count = 0;
+			Tuple2<Integer, Integer> rec = new Tuple2<>();
+			for (Tuple2<Integer, Integer> tuple : valueList) {
+				rec.setField(tuple.f0, 0);
+				count += tuple.f1;
+			}
+			rec.setField(count, 1);
+			out.collect(rec);
+		}
+
+		@Override
+		public void reduce(Iterable<Tuple2<Integer, Integer>> values,
+				Collector<Tuple2<Integer, Integer>> out) throws Exception
+		{
+		}
+	}
+
 	private static Iterator<Integer> getReducingIterator(MutableObjectIterator<Tuple2<Integer, Integer>> data, TypeSerializer<Tuple2<Integer, Integer>> serializer, TypeComparator<Tuple2<Integer, Integer>>  comparator) {
 		
 		final ReusingKeyGroupedIterator<Tuple2<Integer, Integer>>  groupIter = new ReusingKeyGroupedIterator<> (data, serializer, comparator);

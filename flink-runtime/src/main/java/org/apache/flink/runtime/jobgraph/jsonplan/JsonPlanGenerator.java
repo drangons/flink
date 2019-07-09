@@ -18,13 +18,14 @@
 
 package org.apache.flink.runtime.jobgraph.jsonplan;
 
-import com.fasterxml.jackson.core.JsonFactory;
-import com.fasterxml.jackson.core.JsonGenerator;
-
-import org.apache.commons.lang3.StringEscapeUtils;
 import org.apache.flink.runtime.jobgraph.JobEdge;
 import org.apache.flink.runtime.jobgraph.JobGraph;
 import org.apache.flink.runtime.jobgraph.JobVertex;
+
+import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.core.JsonFactory;
+import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
+
+import org.apache.commons.lang3.StringEscapeUtils;
 
 import java.io.StringWriter;
 import java.util.List;
@@ -32,7 +33,7 @@ import java.util.List;
 
 public class JsonPlanGenerator {
 	
-	private static final String NOT_SET = "(not set)";
+	private static final String NOT_SET = "";
 	private static final String EMPTY = "{}";
 	
 	public static String generatePlan(JobGraph jg) {

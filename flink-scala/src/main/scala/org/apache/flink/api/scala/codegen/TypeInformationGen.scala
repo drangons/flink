@@ -19,19 +19,20 @@ package org.apache.flink.api.scala.codegen
 
 import java.lang.reflect.{Field, Modifier}
 
+import org.apache.flink.annotation.Internal
 import org.apache.flink.api.common.ExecutionConfig
 import org.apache.flink.api.common.typeinfo._
 import org.apache.flink.api.common.typeutils._
 import org.apache.flink.api.java.typeutils._
 import org.apache.flink.api.scala.typeutils._
 import org.apache.flink.types.Value
-import org.apache.hadoop.io.Writable
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.language.postfixOps
 import scala.reflect.macros.Context
 
+@Internal
 private[flink] trait TypeInformationGen[C <: Context] {
   this: MacroContextHolder[C]
   with TypeDescriptors[C]
@@ -50,6 +51,9 @@ private[flink] trait TypeInformationGen[C <: Context] {
   // We have this for internal use so that we can use it to recursively generate a tree of
   // TypeInformation from a tree of UDTDescriptor
   def mkTypeInfo[T: c.WeakTypeTag](desc: UDTDescriptor): c.Expr[TypeInformation[T]] = desc match {
+
+    case f: FactoryTypeDescriptor => mkTypeInfoFromFactory(f)
+
     case cc@CaseClassDescriptor(_, tpe, _, _, _) =>
       mkCaseClassTypeInfo(cc)(c.WeakTypeTag(tpe).asInstanceOf[c.WeakTypeTag[Product]])
         .asInstanceOf[c.Expr[TypeInformation[T]]]
@@ -80,15 +84,30 @@ private[flink] trait TypeInformationGen[C <: Context] {
       mkValueTypeInfo(v)(c.WeakTypeTag(v.tpe).asInstanceOf[c.WeakTypeTag[Value]])
         .asInstanceOf[c.Expr[TypeInformation[T]]]
 
-    case d : WritableDescriptor =>
-      mkWritableTypeInfo(d)(c.WeakTypeTag(d.tpe).asInstanceOf[c.WeakTypeTag[Writable]])
-        .asInstanceOf[c.Expr[TypeInformation[T]]]
-
     case pojo: PojoDescriptor => mkPojo(pojo)
 
     case javaTuple: JavaTupleDescriptor => mkJavaTuple(javaTuple)
 
     case d => mkGenericTypeInfo(d)
+  }
+
+  def mkTypeInfoFromFactory[T: c.WeakTypeTag](desc: FactoryTypeDescriptor)
+    : c.Expr[TypeInformation[T]] = {
+
+    val tpeClazz = c.Expr[Class[T]](Literal(Constant(desc.tpe)))
+    val baseClazz = c.Expr[Class[T]](Literal(Constant(desc.baseType)))
+
+    val typeInfos = desc.params map { p => mkTypeInfo(p)(c.WeakTypeTag(p.tpe)).tree }
+    val typeInfosList = c.Expr[List[TypeInformation[_]]](mkList(typeInfos.toList))
+
+    reify {
+      val factory = TypeExtractor.getTypeInfoFactory[T](baseClazz.splice)
+      val genericParameters = typeInfosList.splice
+        .zip(baseClazz.splice.getTypeParameters).map { case (typeInfo, typeParam) =>
+          typeParam.getName -> typeInfo
+        }.toMap[String, TypeInformation[_]]
+      factory.createTypeInfo(tpeClazz.splice, genericParameters.asJava)
+    }
   }
 
   def mkCaseClassTypeInfo[T <: Product : c.WeakTypeTag](
@@ -123,12 +142,20 @@ private[flink] trait TypeInformationGen[C <: Context] {
           for (i <- 0 until getArity) {
             fieldSerializers(i) = types(i).createSerializer(executionConfig)
           }
+          // -------------------------------------------------------------------------------------
+          // NOTE:
+          // the following anonymous class is needed here, and should not be removed
+          // (although appears to be unused) since it is required for backwards compatibility
+          // with Flink versions pre 1.8, that were using Java deserialization.
+          // -------------------------------------------------------------------------------------
+          val unused = new ScalaCaseClassSerializer[T](getTypeClass(), fieldSerializers) {
 
-          new CaseClassSerializer[T](getTypeClass(), fieldSerializers) {
             override def createInstance(fields: Array[AnyRef]): T = {
               instance.splice
             }
           }
+
+          new ScalaCaseClassSerializer[T](getTypeClass, fieldSerializers)
         }
       }
     }
@@ -197,7 +224,40 @@ private[flink] trait TypeInformationGen[C <: Context] {
     val elementClazz = c.Expr[Class[T]](Literal(Constant(desc.elem.tpe)))
     val elementTypeInfo = mkTypeInfo(desc.elem)(c.WeakTypeTag(desc.elem.tpe))
 
-    val cbf = q"implicitly[CanBuildFrom[${desc.tpe}, ${desc.elem.tpe}, ${desc.tpe}]]"
+    // We substitute both type parameters in the Traversable as well as in the element type.
+    //
+    // This is probably best understood using some examples.
+    //
+    // No replacement:
+    // CanBuildFrom[Seq[Any], Any, Seq[Any]]
+    //   -> CanBuildFrom[Seq[Any], Any, Seq[Any]]
+    //
+    // No replacement:
+    // CanBuildFrom[Seq[(Int, String)], (Int, String), Seq[(Int, String)]]
+    //   -> CanBuildFrom[Seq[(Int, String)], (Int, String), Seq[(Int, String)]]
+    //
+    // Replacing type parameters of the element type, i.e. the Tuple type:
+    // CanBuildFrom[Seq[(T, U)], (T, U), Seq[(T, U)]]
+    //   -> CanBuildFrom[Seq[(Object, Object)], (Object, Object), Seq[(Object, Object)]]
+    //
+    // Replacing the element type itself because it is a type parameter:
+    // CanBuildFrom[Seq[T], T, Seq[T]]
+    //   -> CanBuildFrom[Seq[Object], Object, Seq[Object]]
+
+    def replaceGenericTypeParameter(innerTpe: c.Type): c.Type = {
+      if (innerTpe.typeSymbol.isParameter) {
+        innerTpe.erasure
+      } else {
+        innerTpe
+      }
+    }
+    val traversableTpe = desc.tpe.map(replaceGenericTypeParameter)
+    val elemTpe = desc.elem.tpe.map(replaceGenericTypeParameter)
+
+    val cbf = q"scala.collection.generic.CanBuildFrom[$traversableTpe, $elemTpe, $traversableTpe]"
+    val cbfString = s"implicitly[$cbf]"
+
+    val cbfStringLiteral = c.Expr[Class[T]](Literal(Constant(cbfString)))
 
     val result = q"""
       import scala.collection.generic.CanBuildFrom
@@ -208,10 +268,23 @@ private[flink] trait TypeInformationGen[C <: Context] {
       val elementTpe = $elementTypeInfo
       new TraversableTypeInfo($collectionClass, elementTpe) {
         def createSerializer(executionConfig: ExecutionConfig) = {
+
+          // -------------------------------------------------------------------------------------
+          // NOTE:
+          // the following anonymous class is needed here, and should not be removed
+          // (although appears to be unused) since it is required for backwards compatibility
+          // with Flink versions pre 1.8, that were using Java deserialization.
+          // -------------------------------------------------------------------------------------
+          val unused = new TraversableSerializer[${desc.tpe}, ${desc.elem.tpe}](
+              elementTpe.createSerializer(executionConfig),
+              $cbfStringLiteral) {
+
+                  override def legacyCbfCode = $cbfStringLiteral
+              }
+
           new TraversableSerializer[${desc.tpe}, ${desc.elem.tpe}](
-              elementTpe.createSerializer(executionConfig)) {
-            def getCbf = implicitly[CanBuildFrom[${desc.tpe}, ${desc.elem.tpe}, ${desc.tpe}]]
-          }
+                                  elementTpe.createSerializer(executionConfig),
+                                  $cbfStringLiteral)
         }
       }
     """
@@ -282,14 +355,6 @@ private[flink] trait TypeInformationGen[C <: Context] {
     val tpeClazz = c.Expr[Class[T]](Literal(Constant(desc.tpe)))
     reify {
       new ValueTypeInfo[T](tpeClazz.splice)
-    }
-  }
-
-  def mkWritableTypeInfo[T <: Writable : c.WeakTypeTag](
-      desc: UDTDescriptor): c.Expr[TypeInformation[T]] = {
-    val tpeClazz = c.Expr[Class[T]](Literal(Constant(desc.tpe)))
-    reify {
-      new WritableTypeInfo[T](tpeClazz.splice)
     }
   }
 
@@ -375,7 +440,7 @@ private[flink] trait TypeInformationGen[C <: Context] {
     val result = c.inferImplicitValue(
       c.weakTypeOf[TypeInformation[T]],
       silent = true,
-      withMacrosDisabled =  false,
+      withMacrosDisabled = true,
       pos = c.enclosingPosition)
 
     if (result.isEmpty) {

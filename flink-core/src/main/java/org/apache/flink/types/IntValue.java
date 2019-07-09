@@ -21,6 +21,7 @@ package org.apache.flink.types;
 
 import java.io.IOException;
 
+import org.apache.flink.annotation.Public;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
 import org.apache.flink.core.memory.MemorySegment;
@@ -28,9 +29,8 @@ import org.apache.flink.core.memory.MemorySegment;
 /**
  * Boxed serializable and comparable integer type, representing the primitive
  * type {@code int}.
- * 
- * @see org.apache.flink.types.Key
  */
+@Public
 public class IntValue implements NormalizableKey<IntValue>, ResettableValue<IntValue>, CopyableValue<IntValue> {
 	private static final long serialVersionUID = 1L;
 	
@@ -123,7 +123,7 @@ public class IntValue implements NormalizableKey<IntValue>, ResettableValue<IntV
 
 	@Override
 	public void copyNormalizedKey(MemorySegment target, int offset, int len) {
-		// take out value and add the integer min value. This gets an offsetted
+		// take out value and add the integer min value. This gets an offset
 		// representation when interpreted as an unsigned integer (as is the case
 		// with normalized keys). write this value as big endian to ensure the
 		// most significant byte comes first.

@@ -19,43 +19,32 @@
 package org.apache.flink.runtime.taskmanager;
 
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.runtime.taskexecutor.TaskExecutor;
 
 /**
- * Encapsulation of TaskManager runtime information, like hostname and configuration.
+ * Interface to access {@link TaskExecutor} information.
  */
-public class TaskManagerRuntimeInfo implements java.io.Serializable {
-
-	private static final long serialVersionUID = 5598219619760274072L;
-	
-	/** host name of the interface that the TaskManager uses to communicate */
-	private final String hostname;
-
-	/** configuration that the TaskManager was started with */
-	private final Configuration configuration;
-
-	/**
-	 * Creates a runtime info.
-	 * @param hostname The host name of the interface that the TaskManager uses to communicate.
-	 * @param configuration The configuration that the TaskManager was started with.
-	 */
-	public TaskManagerRuntimeInfo(String hostname, Configuration configuration) {
-		this.hostname = hostname;
-		this.configuration = configuration;
-	}
-
-	/**
-	 * Gets host name of the interface that the TaskManager uses to communicate.
-	 * @return The host name of the interface that the TaskManager uses to communicate.
-	 */
-	public String getHostname() {
-		return hostname;
-	}
+public interface TaskManagerRuntimeInfo {
 
 	/**
 	 * Gets the configuration that the TaskManager was started with.
+	 *
 	 * @return The configuration that the TaskManager was started with.
 	 */
-	public Configuration getConfiguration() {
-		return configuration;
-	}
+	Configuration getConfiguration();
+
+	/**
+	 * Gets the list of temporary file directories.
+	 * 
+	 * @return The list of temporary file directories.
+	 */
+	String[] getTmpDirectories();
+
+	/**
+	 * Checks whether the TaskManager should exit the JVM when the task thread throws
+	 * an OutOfMemoryError.
+	 * 
+	 * @return True to terminate the JVM on an OutOfMemoryError, false otherwise.
+	 */
+	boolean shouldExitJvmOnOutOfMemoryError();
 }

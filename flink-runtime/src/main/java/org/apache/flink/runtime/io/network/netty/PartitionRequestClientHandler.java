@@ -18,22 +18,26 @@
 
 package org.apache.flink.runtime.io.network.netty;
 
-import com.google.common.collect.Maps;
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelInboundHandlerAdapter;
-
 import org.apache.flink.core.memory.MemorySegment;
 import org.apache.flink.core.memory.MemorySegmentFactory;
+import org.apache.flink.runtime.io.network.NetworkClientHandler;
 import org.apache.flink.runtime.io.network.buffer.Buffer;
+import org.apache.flink.runtime.io.network.buffer.BufferListener;
 import org.apache.flink.runtime.io.network.buffer.BufferProvider;
 import org.apache.flink.runtime.io.network.buffer.FreeingBufferRecycler;
+import org.apache.flink.runtime.io.network.buffer.NetworkBuffer;
 import org.apache.flink.runtime.io.network.netty.exception.LocalTransportException;
 import org.apache.flink.runtime.io.network.netty.exception.RemoteTransportException;
 import org.apache.flink.runtime.io.network.netty.exception.TransportException;
 import org.apache.flink.runtime.io.network.partition.PartitionNotFoundException;
 import org.apache.flink.runtime.io.network.partition.consumer.InputChannelID;
 import org.apache.flink.runtime.io.network.partition.consumer.RemoteInputChannel;
-import org.apache.flink.runtime.util.event.EventListener;
+
+import org.apache.flink.shaded.guava18.com.google.common.collect.Maps;
+import org.apache.flink.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.flink.shaded.netty4.io.netty.channel.ChannelHandlerContext;
+import org.apache.flink.shaded.netty4.io.netty.channel.ChannelInboundHandlerAdapter;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -43,18 +47,21 @@ import java.util.ArrayDeque;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
-import static com.google.common.base.Preconditions.checkState;
-
-class PartitionRequestClientHandler extends ChannelInboundHandlerAdapter {
+/**
+ * Channel handler to read the messages of buffer response or error response from the
+ * producer.
+ *
+ * <p>It is used in the old network mode.
+ */
+class PartitionRequestClientHandler extends ChannelInboundHandlerAdapter implements NetworkClientHandler {
 
 	private static final Logger LOG = LoggerFactory.getLogger(PartitionRequestClientHandler.class);
 
 	private final ConcurrentMap<InputChannelID, RemoteInputChannel> inputChannels = new ConcurrentHashMap<InputChannelID, RemoteInputChannel>();
 
-	private final AtomicBoolean channelError = new AtomicBoolean(false);
+	private final AtomicReference<Throwable> channelError = new AtomicReference<Throwable>();
 
 	private final BufferListenerTask bufferListener = new BufferListenerTask();
 
@@ -74,19 +81,20 @@ class PartitionRequestClientHandler extends ChannelInboundHandlerAdapter {
 	// Input channel/receiver registration
 	// ------------------------------------------------------------------------
 
-	void addInputChannel(RemoteInputChannel listener) {
-		checkState(!channelError.get(), "There has been an error in the channel.");
+	@Override
+	public void addInputChannel(RemoteInputChannel listener) throws IOException {
+		checkError();
 
-		if (!inputChannels.containsKey(listener.getInputChannelId())) {
-			inputChannels.put(listener.getInputChannelId(), listener);
-		}
+		inputChannels.putIfAbsent(listener.getInputChannelId(), listener);
 	}
 
-	void removeInputChannel(RemoteInputChannel listener) {
+	@Override
+	public void removeInputChannel(RemoteInputChannel listener) {
 		inputChannels.remove(listener.getInputChannelId());
 	}
 
-	void cancelRequestFor(InputChannelID inputChannelId) {
+	@Override
+	public void cancelRequestFor(InputChannelID inputChannelId) {
 		if (inputChannelId == null || ctx == null) {
 			return;
 		}
@@ -94,6 +102,10 @@ class PartitionRequestClientHandler extends ChannelInboundHandlerAdapter {
 		if (cancelled.putIfAbsent(inputChannelId, inputChannelId) == null) {
 			ctx.writeAndFlush(new NettyMessage.CancelPartitionRequest(inputChannelId));
 		}
+	}
+
+	@Override
+	public void notifyCreditAvailable(final RemoteInputChannel inputChannel) {
 	}
 
 	// ------------------------------------------------------------------------
@@ -150,7 +162,11 @@ class PartitionRequestClientHandler extends ChannelInboundHandlerAdapter {
 								+ "that the remote task manager was lost.", remoteAddr, cause);
 			}
 			else {
-				tex = new LocalTransportException(cause.getMessage(), ctx.channel().localAddress(), cause);
+				SocketAddress localAddr = ctx.channel().localAddress();
+				tex = new LocalTransportException(
+					String.format("%s (connection to '%s')", cause.getMessage(), remoteAddr),
+					localAddr,
+					cause);
 			}
 
 			notifyAllChannelsOfErrorAndClose(tex);
@@ -161,7 +177,7 @@ class PartitionRequestClientHandler extends ChannelInboundHandlerAdapter {
 	public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
 		try {
 			if (!bufferListener.hasStagedBufferOrEvent() && stagedMessages.isEmpty()) {
-				decodeMsg(msg);
+				decodeMsg(msg, false);
 			}
 			else {
 				stagedMessages.add(msg);
@@ -173,7 +189,7 @@ class PartitionRequestClientHandler extends ChannelInboundHandlerAdapter {
 	}
 
 	private void notifyAllChannelsOfErrorAndClose(Throwable cause) {
-		if (channelError.compareAndSet(false, true)) {
+		if (channelError.compareAndSet(null, cause)) {
 			try {
 				for (RemoteInputChannel inputChannel : inputChannels.values()) {
 					inputChannel.onError(cause);
@@ -196,12 +212,28 @@ class PartitionRequestClientHandler extends ChannelInboundHandlerAdapter {
 
 	// ------------------------------------------------------------------------
 
+	/**
+	 * Checks for an error and rethrows it if one was reported.
+	 */
+	private void checkError() throws IOException {
+		final Throwable t = channelError.get();
+
+		if (t != null) {
+			if (t instanceof IOException) {
+				throw (IOException) t;
+			}
+			else {
+				throw new IOException("There has been an error in the channel.", t);
+			}
+		}
+	}
+
 	@Override
 	public void channelReadComplete(ChannelHandlerContext ctx) throws Exception {
 		super.channelReadComplete(ctx);
 	}
 
-	private boolean decodeMsg(Object msg) throws Throwable {
+	private boolean decodeMsg(Object msg, boolean isStagedBuffer) throws Throwable {
 		final Class<?> msgClazz = msg.getClass();
 
 		// ---- Buffer --------------------------------------------------------
@@ -217,7 +249,7 @@ class PartitionRequestClientHandler extends ChannelInboundHandlerAdapter {
 				return true;
 			}
 
-			return decodeBufferOrEvent(inputChannel, bufferOrEvent);
+			return decodeBufferOrEvent(inputChannel, bufferOrEvent, isStagedBuffer);
 		}
 		// ---- Error ---------------------------------------------------------
 		else if (msgClazz == NettyMessage.ErrorResponse.class) {
@@ -252,37 +284,37 @@ class PartitionRequestClientHandler extends ChannelInboundHandlerAdapter {
 		return true;
 	}
 
-	private boolean decodeBufferOrEvent(RemoteInputChannel inputChannel, NettyMessage.BufferResponse bufferOrEvent) throws Throwable {
+	private boolean decodeBufferOrEvent(RemoteInputChannel inputChannel, NettyMessage.BufferResponse bufferOrEvent, boolean isStagedBuffer) throws Throwable {
 		boolean releaseNettyBuffer = true;
 
 		try {
+			ByteBuf nettyBuffer = bufferOrEvent.getNettyBuffer();
+			final int receivedSize = nettyBuffer.readableBytes();
 			if (bufferOrEvent.isBuffer()) {
 				// ---- Buffer ------------------------------------------------
 
 				// Early return for empty buffers. Otherwise Netty's readBytes() throws an
 				// IndexOutOfBoundsException.
-				if (bufferOrEvent.getSize() == 0) {
-					inputChannel.onEmptyBuffer(bufferOrEvent.sequenceNumber);
+				if (receivedSize == 0) {
+					inputChannel.onEmptyBuffer(bufferOrEvent.sequenceNumber, -1);
 					return true;
 				}
 
 				BufferProvider bufferProvider = inputChannel.getBufferProvider();
 
 				if (bufferProvider == null) {
-
+					// receiver has been cancelled/failed
 					cancelRequestFor(bufferOrEvent.receiverId);
-
-					return false; // receiver has been cancelled/failed
+					return isStagedBuffer;
 				}
 
 				while (true) {
 					Buffer buffer = bufferProvider.requestBuffer();
 
 					if (buffer != null) {
-						buffer.setSize(bufferOrEvent.getSize());
-						bufferOrEvent.getNettyBuffer().readBytes(buffer.getNioBuffer());
+						nettyBuffer.readBytes(buffer.asByteBuf(), receivedSize);
 
-						inputChannel.onBuffer(buffer, bufferOrEvent.sequenceNumber);
+						inputChannel.onBuffer(buffer, bufferOrEvent.sequenceNumber, -1);
 
 						return true;
 					}
@@ -292,20 +324,20 @@ class PartitionRequestClientHandler extends ChannelInboundHandlerAdapter {
 						return false;
 					}
 					else if (bufferProvider.isDestroyed()) {
-						return false;
+						return isStagedBuffer;
 					}
 				}
 			}
 			else {
 				// ---- Event -------------------------------------------------
 				// TODO We can just keep the serialized data in the Netty buffer and release it later at the reader
-				byte[] byteArray = new byte[bufferOrEvent.getSize()];
-				bufferOrEvent.getNettyBuffer().readBytes(byteArray);
+				byte[] byteArray = new byte[receivedSize];
+				nettyBuffer.readBytes(byteArray);
 
 				MemorySegment memSeg = MemorySegmentFactory.wrap(byteArray);
-				Buffer buffer = new Buffer(memSeg, FreeingBufferRecycler.INSTANCE, false);
+				Buffer buffer = new NetworkBuffer(memSeg, FreeingBufferRecycler.INSTANCE, false, receivedSize);
 
-				inputChannel.onBuffer(buffer, bufferOrEvent.sequenceNumber);
+				inputChannel.onBuffer(buffer, bufferOrEvent.sequenceNumber, -1);
 
 				return true;
 			}
@@ -334,15 +366,15 @@ class PartitionRequestClientHandler extends ChannelInboundHandlerAdapter {
 	/**
 	 * A buffer availability listener, which subscribes/unsubscribes the NIO
 	 * read event.
-	 * <p>
-	 * If no buffer is available, the channel read event will be unsubscribed
+	 *
+	 * <p>If no buffer is available, the channel read event will be unsubscribed
 	 * until one becomes available again.
-	 * <p>
-	 * After a buffer becomes available again, the buffer is handed over by
-	 * the thread calling {@link #onEvent(Buffer)} to the network I/O
+	 *
+	 * <p>After a buffer becomes available again, the buffer is handed over by
+	 * the thread calling {@link #notifyBufferAvailable(Buffer)} to the network I/O
 	 * thread, which then continues the processing of the staged buffer.
 	 */
-	private class BufferListenerTask implements EventListener<Buffer>, Runnable {
+	private class BufferListenerTask implements BufferListener, Runnable {
 
 		private final AtomicReference<Buffer> availableBuffer = new AtomicReference<Buffer>();
 
@@ -352,7 +384,7 @@ class PartitionRequestClientHandler extends ChannelInboundHandlerAdapter {
 
 			stagedBufferResponse = bufferResponse;
 
-			if (bufferProvider.addListener(this)) {
+			if (bufferProvider.addBufferListener(this)) {
 				if (ctx.channel().config().isAutoRead()) {
 					ctx.channel().config().setAutoRead(false);
 				}
@@ -370,52 +402,39 @@ class PartitionRequestClientHandler extends ChannelInboundHandlerAdapter {
 			return stagedBufferResponse != null;
 		}
 
+		public void notifyBufferDestroyed() {
+			// The buffer pool has been destroyed
+			stagedBufferResponse = null;
+
+			if (stagedMessages.isEmpty()) {
+				ctx.channel().config().setAutoRead(true);
+				ctx.channel().read();
+			}
+			else {
+				ctx.channel().eventLoop().execute(stagedMessagesHandler);
+			}
+		}
+
 		// Called by the recycling thread (not network I/O thread)
 		@Override
-		public void onEvent(Buffer buffer) {
-			boolean success = false;
+		public NotificationResult notifyBufferAvailable(Buffer buffer) {
+			if (availableBuffer.compareAndSet(null, buffer)) {
+				ctx.channel().eventLoop().execute(this);
 
-			try {
-				if (buffer != null) {
-					if (availableBuffer.compareAndSet(null, buffer)) {
-						ctx.channel().eventLoop().execute(this);
-
-						success = true;
-					}
-					else {
-						throw new IllegalStateException("Received a buffer notification, " +
-								" but the previous one has not been handled yet.");
-					}
-				}
-				else {
-					// The buffer pool has been destroyed
-					stagedBufferResponse = null;
-
-					if (stagedMessages.isEmpty()) {
-						ctx.channel().config().setAutoRead(true);
-						ctx.channel().read();
-					}
-					else {
-						ctx.channel().eventLoop().execute(stagedMessagesHandler);
-					}
-				}
+				return NotificationResult.BUFFER_USED_NO_NEED_MORE;
 			}
-			catch (Throwable t) {
-				ctx.channel().eventLoop().execute(new AsyncErrorNotificationTask(t));
-			}
-			finally {
-				if (!success) {
-					if (buffer != null) {
-						buffer.recycle();
-					}
-				}
+			else {
+				ctx.channel().eventLoop().execute(new AsyncErrorNotificationTask(
+					new IllegalStateException("Received a buffer notification, " +
+						" but the previous one has not been handled yet.")));
+				return NotificationResult.BUFFER_NOT_USED;
 			}
 		}
 
 		/**
 		 * Continues the decoding of a staged buffer after a buffer has become available again.
-		 * <p>
-		 * This task is executed by the network I/O thread.
+		 *
+		 * <p>This task is executed by the network I/O thread.
 		 */
 		@Override
 		public void run() {
@@ -428,15 +447,14 @@ class PartitionRequestClientHandler extends ChannelInboundHandlerAdapter {
 					throw new IllegalStateException("Running buffer availability task w/o a buffer.");
 				}
 
-				buffer.setSize(stagedBufferResponse.getSize());
-
-				stagedBufferResponse.getNettyBuffer().readBytes(buffer.getNioBuffer());
+				ByteBuf nettyBuffer = stagedBufferResponse.getNettyBuffer();
+				nettyBuffer.readBytes(buffer.asByteBuf(), nettyBuffer.readableBytes());
 				stagedBufferResponse.releaseBuffer();
 
 				RemoteInputChannel inputChannel = inputChannels.get(stagedBufferResponse.receiverId);
 
 				if (inputChannel != null) {
-					inputChannel.onBuffer(buffer, stagedBufferResponse.sequenceNumber);
+					inputChannel.onBuffer(buffer, stagedBufferResponse.sequenceNumber, -1);
 
 					success = true;
 				}
@@ -460,7 +478,7 @@ class PartitionRequestClientHandler extends ChannelInboundHandlerAdapter {
 			finally {
 				if (!success) {
 					if (buffer != null) {
-						buffer.recycle();
+						buffer.recycleBuffer();
 					}
 				}
 			}
@@ -474,7 +492,7 @@ class PartitionRequestClientHandler extends ChannelInboundHandlerAdapter {
 			try {
 				Object msg;
 				while ((msg = stagedMessages.poll()) != null) {
-					if (!decodeMsg(msg)) {
+					if (!decodeMsg(msg, true)) {
 						return;
 					}
 				}

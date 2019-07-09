@@ -18,13 +18,20 @@
 
 package org.apache.flink.runtime.instance;
 
-import static org.junit.Assert.*;
+import org.apache.flink.runtime.clusterframework.types.ResourceID;
+import org.apache.flink.runtime.executiongraph.utils.SimpleAckingTaskManagerGateway;
+import org.apache.flink.runtime.taskmanager.TaskManagerLocation;
+
+import org.junit.Test;
 
 import java.lang.reflect.Method;
 import java.net.InetAddress;
 
-import org.apache.flink.api.common.JobID;
-import org.junit.Test;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 /**
  * Tests for the {@link Instance} class.
@@ -34,20 +41,26 @@ public class InstanceTest {
 	@Test
 	public void testAllocatingAndCancellingSlots() {
 		try {
+			ResourceID resourceID = ResourceID.generate();
 			HardwareDescription hardwareDescription = new HardwareDescription(4, 2L*1024*1024*1024, 1024*1024*1024, 512*1024*1024);
 			InetAddress address = InetAddress.getByName("127.0.0.1");
-			InstanceConnectionInfo connection = new InstanceConnectionInfo(address, 10001);
+			TaskManagerLocation connection = new TaskManagerLocation(resourceID, address, 10001);
 
-			Instance instance = new Instance(DummyActorGateway.INSTANCE, connection, new InstanceID(), hardwareDescription, 4);
+			Instance instance = new Instance(
+				new SimpleAckingTaskManagerGateway(),
+				connection,
+				new InstanceID(),
+				hardwareDescription,
+				4);
 
 			assertEquals(4, instance.getTotalNumberOfSlots());
 			assertEquals(4, instance.getNumberOfAvailableSlots());
 			assertEquals(0, instance.getNumberOfAllocatedSlots());
 
-			SimpleSlot slot1 = instance.allocateSimpleSlot(new JobID());
-			SimpleSlot slot2 = instance.allocateSimpleSlot(new JobID());
-			SimpleSlot slot3 = instance.allocateSimpleSlot(new JobID());
-			SimpleSlot slot4 = instance.allocateSimpleSlot(new JobID());
+			SimpleSlot slot1 = instance.allocateSimpleSlot();
+			SimpleSlot slot2 = instance.allocateSimpleSlot();
+			SimpleSlot slot3 = instance.allocateSimpleSlot();
+			SimpleSlot slot4 = instance.allocateSimpleSlot();
 
 			assertNotNull(slot1);
 			assertNotNull(slot2);
@@ -60,9 +73,9 @@ public class InstanceTest {
 					slot3.getSlotNumber() + slot4.getSlotNumber());
 
 			// no more slots
-			assertNull(instance.allocateSimpleSlot(new JobID()));
+			assertNull(instance.allocateSimpleSlot());
 			try {
-				instance.returnAllocatedSlot(slot2);
+				instance.returnLogicalSlot(slot2);
 				fail("instance accepted a non-cancelled slot.");
 			}
 			catch (IllegalArgumentException e) {
@@ -78,10 +91,10 @@ public class InstanceTest {
 			assertEquals(4, instance.getNumberOfAvailableSlots());
 			assertEquals(0, instance.getNumberOfAllocatedSlots());
 
-			assertFalse(instance.returnAllocatedSlot(slot1));
-			assertFalse(instance.returnAllocatedSlot(slot2));
-			assertFalse(instance.returnAllocatedSlot(slot3));
-			assertFalse(instance.returnAllocatedSlot(slot4));
+			instance.returnLogicalSlot(slot1);
+			instance.returnLogicalSlot(slot2);
+			instance.returnLogicalSlot(slot3);
+			instance.returnLogicalSlot(slot4);
 
 			assertEquals(4, instance.getNumberOfAvailableSlots());
 			assertEquals(0, instance.getNumberOfAllocatedSlots());
@@ -95,17 +108,23 @@ public class InstanceTest {
 	@Test
 	public void testInstanceDies() {
 		try {
+			ResourceID resourceID = ResourceID.generate();
 			HardwareDescription hardwareDescription = new HardwareDescription(4, 2L*1024*1024*1024, 1024*1024*1024, 512*1024*1024);
 			InetAddress address = InetAddress.getByName("127.0.0.1");
-			InstanceConnectionInfo connection = new InstanceConnectionInfo(address, 10001);
+			TaskManagerLocation connection = new TaskManagerLocation(resourceID, address, 10001);
 
-			Instance instance = new Instance(DummyActorGateway.INSTANCE, connection, new InstanceID(), hardwareDescription, 3);
+			Instance instance = new Instance(
+				new SimpleAckingTaskManagerGateway(),
+				connection,
+				new InstanceID(),
+				hardwareDescription,
+				3);
 
 			assertEquals(3, instance.getNumberOfAvailableSlots());
 
-			SimpleSlot slot1 = instance.allocateSimpleSlot(new JobID());
-			SimpleSlot slot2 = instance.allocateSimpleSlot(new JobID());
-			SimpleSlot slot3 = instance.allocateSimpleSlot(new JobID());
+			SimpleSlot slot1 = instance.allocateSimpleSlot();
+			SimpleSlot slot2 = instance.allocateSimpleSlot();
+			SimpleSlot slot3 = instance.allocateSimpleSlot();
 
 			instance.markDead();
 
@@ -125,17 +144,23 @@ public class InstanceTest {
 	@Test
 	public void testCancelAllSlots() {
 		try {
+			ResourceID resourceID = ResourceID.generate();
 			HardwareDescription hardwareDescription = new HardwareDescription(4, 2L*1024*1024*1024, 1024*1024*1024, 512*1024*1024);
 			InetAddress address = InetAddress.getByName("127.0.0.1");
-			InstanceConnectionInfo connection = new InstanceConnectionInfo(address, 10001);
+			TaskManagerLocation connection = new TaskManagerLocation(resourceID, address, 10001);
 
-			Instance instance = new Instance(DummyActorGateway.INSTANCE, connection, new InstanceID(), hardwareDescription, 3);
+			Instance instance = new Instance(
+				new SimpleAckingTaskManagerGateway(),
+				connection,
+				new InstanceID(),
+				hardwareDescription,
+				3);
 
 			assertEquals(3, instance.getNumberOfAvailableSlots());
 
-			SimpleSlot slot1 = instance.allocateSimpleSlot(new JobID());
-			SimpleSlot slot2 = instance.allocateSimpleSlot(new JobID());
-			SimpleSlot slot3 = instance.allocateSimpleSlot(new JobID());
+			SimpleSlot slot1 = instance.allocateSimpleSlot();
+			SimpleSlot slot2 = instance.allocateSimpleSlot();
+			SimpleSlot slot3 = instance.allocateSimpleSlot();
 
 			instance.cancelAndReleaseAllSlots();
 

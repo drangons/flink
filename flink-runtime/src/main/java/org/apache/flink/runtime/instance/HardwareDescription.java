@@ -18,7 +18,13 @@
 
 package org.apache.flink.runtime.instance;
 
+import org.apache.flink.runtime.util.Hardware;
+
+import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.annotation.JsonCreator;
+import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.annotation.JsonProperty;
+
 import java.io.Serializable;
+import java.util.Objects;
 
 /**
  * A hardware description describes the resources available to a task manager.
@@ -27,23 +33,29 @@ public final class HardwareDescription implements Serializable {
 
 	private static final long serialVersionUID = 3380016608300325361L;
 
+	public static final String FIELD_NAME_CPU_CORES = "cpuCores";
+
+	public static final String FIELD_NAME_SIZE_PHYSICAL_MEMORY = "physicalMemory";
+
+	public static final String FIELD_NAME_SIZE_JVM_HEAP = "freeMemory";
+
+	public static final String FIELD_NAME_SIZE_MANAGED_MEMORY = "managedMemory";
+
 	/** The number of CPU cores available to the JVM on the compute node. */
-	private int numberOfCPUCores;
+	@JsonProperty(FIELD_NAME_CPU_CORES)
+	private final int numberOfCPUCores;
 
 	/** The size of physical memory in bytes available on the compute node. */
-	private long sizeOfPhysicalMemory;
+	@JsonProperty(FIELD_NAME_SIZE_PHYSICAL_MEMORY)
+	private final long sizeOfPhysicalMemory;
 
 	/** The size of the JVM heap memory */
-	private long sizeOfJvmHeap;
-	
-	/** The size of the memory managed by the system for caching, hashing, sorting, ... */
-	private long sizeOfManagedMemory;
+	@JsonProperty(FIELD_NAME_SIZE_JVM_HEAP)
+	private final long sizeOfJvmHeap;
 
-	
-	/**
-	 * Public default constructor used for serialization process.
-	 */
-	public HardwareDescription() {}
+	/** The size of the memory managed by the system for caching, hashing, sorting, ... */
+	@JsonProperty(FIELD_NAME_SIZE_MANAGED_MEMORY)
+	private final long sizeOfManagedMemory;
 
 	/**
 	 * Constructs a new hardware description object.
@@ -53,7 +65,12 @@ public final class HardwareDescription implements Serializable {
 	 * @param sizeOfJvmHeap The size of the JVM heap memory.
 	 * @param sizeOfManagedMemory The size of the memory managed by the system for caching, hashing, sorting, ...
 	 */
-	public HardwareDescription(int numberOfCPUCores, long sizeOfPhysicalMemory, long sizeOfJvmHeap, long sizeOfManagedMemory) {
+	@JsonCreator
+	public HardwareDescription(
+			@JsonProperty(FIELD_NAME_CPU_CORES) int numberOfCPUCores,
+			@JsonProperty(FIELD_NAME_SIZE_PHYSICAL_MEMORY) long sizeOfPhysicalMemory,
+			@JsonProperty(FIELD_NAME_SIZE_JVM_HEAP) long sizeOfJvmHeap,
+			@JsonProperty(FIELD_NAME_SIZE_MANAGED_MEMORY) long sizeOfManagedMemory) {
 		this.numberOfCPUCores = numberOfCPUCores;
 		this.sizeOfPhysicalMemory = sizeOfPhysicalMemory;
 		this.sizeOfJvmHeap = sizeOfJvmHeap;
@@ -86,7 +103,7 @@ public final class HardwareDescription implements Serializable {
 	public long getSizeOfJvmHeap() {
 		return this.sizeOfJvmHeap;
 	}
-	
+
 	/**
 	 * Returns the size of the memory managed by the system for caching, hashing, sorting, ...
 	 * 
@@ -95,26 +112,47 @@ public final class HardwareDescription implements Serializable {
 	public long getSizeOfManagedMemory() {
 		return this.sizeOfManagedMemory;
 	}
-	
+
 	// --------------------------------------------------------------------------------------------
 	// Utils
 	// --------------------------------------------------------------------------------------------
-	
+
+
+	@Override
+	public boolean equals(Object o) {
+		if (this == o) {
+			return true;
+		}
+		if (o == null || getClass() != o.getClass()) {
+			return false;
+		}
+		HardwareDescription that = (HardwareDescription) o;
+		return numberOfCPUCores == that.numberOfCPUCores &&
+			sizeOfPhysicalMemory == that.sizeOfPhysicalMemory &&
+			sizeOfJvmHeap == that.sizeOfJvmHeap &&
+			sizeOfManagedMemory == that.sizeOfManagedMemory;
+	}
+
+	@Override
+	public int hashCode() {
+		return Objects.hash(numberOfCPUCores, sizeOfPhysicalMemory, sizeOfJvmHeap, sizeOfManagedMemory);
+	}
+
 	@Override
 	public String toString() {
 		return String.format("cores=%d, physMem=%d, heap=%d, managed=%d", 
 				numberOfCPUCores, sizeOfPhysicalMemory, sizeOfJvmHeap, sizeOfManagedMemory);
 	}
-	
+
 	// --------------------------------------------------------------------------------------------
 	// Factory
 	// --------------------------------------------------------------------------------------------
-	
+
 	public static HardwareDescription extractFromSystem(long managedMemory) {
 		final int numberOfCPUCores = Hardware.getNumberCPUCores();
 		final long sizeOfJvmHeap = Runtime.getRuntime().maxMemory();
 		final long sizeOfPhysicalMemory = Hardware.getSizeOfPhysicalMemory();
-		
+
 		return new HardwareDescription(numberOfCPUCores, sizeOfPhysicalMemory, sizeOfJvmHeap, managedMemory);
 	}
 }

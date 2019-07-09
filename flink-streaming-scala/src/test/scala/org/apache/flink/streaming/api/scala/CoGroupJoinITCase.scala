@@ -21,18 +21,19 @@ package org.apache.flink.streaming.api.scala
 import java.util.concurrent.TimeUnit
 
 import org.apache.flink.streaming.api.TimeCharacteristic
-import org.apache.flink.streaming.api.functions.TimestampExtractor
+import org.apache.flink.streaming.api.functions.AssignerWithPunctuatedWatermarks
 import org.apache.flink.streaming.api.functions.sink.SinkFunction
 import org.apache.flink.streaming.api.functions.source.SourceFunction
-import org.apache.flink.streaming.api.windowing.assigners.TumblingTimeWindows
+import org.apache.flink.streaming.api.watermark.Watermark
+import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows
 import org.apache.flink.streaming.api.windowing.time.Time
-import org.apache.flink.streaming.util.StreamingMultipleProgramsTestBase
-import org.junit.Test
+import org.apache.flink.test.util.AbstractTestBase
 import org.junit.Assert._
+import org.junit.Test
 
 import scala.collection.mutable
 
-class CoGroupJoinITCase extends StreamingMultipleProgramsTestBase {
+class CoGroupJoinITCase extends AbstractTestBase {
 
   @Test
   def testCoGroup(): Unit = {
@@ -53,11 +54,13 @@ class CoGroupJoinITCase extends StreamingMultipleProgramsTestBase {
         ctx.collect(("a", 6))
         ctx.collect(("a", 7))
         ctx.collect(("a", 8))
+
+        // source is finite, so it will have an implicit MAX watermark when it finishes
       }
 
-      def cancel() {
-      }
-    }).assignTimestamps(new CoGroupJoinITCase.Tuple2TimestampExtractor)
+      def cancel() {}
+      
+    }).assignTimestampsAndWatermarks(new CoGroupJoinITCase.Tuple2TimestampExtractor)
 
     val source2 = env.addSource(new SourceFunction[(String, Int)]() {
       def run(ctx: SourceFunction.SourceContext[(String, Int)]) {
@@ -67,21 +70,23 @@ class CoGroupJoinITCase extends StreamingMultipleProgramsTestBase {
         ctx.collect(("c", 6))
         ctx.collect(("c", 7))
         ctx.collect(("c", 8))
+
+        // source is finite, so it will have an implicit MAX watermark when it finishes
       }
 
       def cancel() {
       }
-    }).assignTimestamps(new CoGroupJoinITCase.Tuple2TimestampExtractor)
+    }).assignTimestampsAndWatermarks(new CoGroupJoinITCase.Tuple2TimestampExtractor)
 
     source1.coGroup(source2)
       .where(_._1)
       .equalTo(_._1)
-      .window(TumblingTimeWindows.of(Time.of(3, TimeUnit.MILLISECONDS)))
+      .window(TumblingEventTimeWindows.of(Time.of(3, TimeUnit.MILLISECONDS)))
       .apply { (first: Iterator[(String, Int)], second: Iterator[(String, Int)]) =>
           "F:" + first.mkString("") + " S:" + second.mkString("")
       }
       .addSink(new SinkFunction[String]() {
-        def invoke(value: String) {
+        override def invoke(value: String) {
           CoGroupJoinITCase.testResults += value
         }
       })
@@ -117,11 +122,13 @@ class CoGroupJoinITCase extends StreamingMultipleProgramsTestBase {
         ctx.collect(("a", "i", 6))
         ctx.collect(("a", "j", 7))
         ctx.collect(("a", "k", 8))
+
+        // source is finite, so it will have an implicit MAX watermark when it finishes
       }
 
-      def cancel() {
-      }
-    }).assignTimestamps(new CoGroupJoinITCase.Tuple3TimestampExtractor)
+      def cancel() {}
+      
+    }).assignTimestampsAndWatermarks(new CoGroupJoinITCase.Tuple3TimestampExtractor)
 
     val source2 = env.addSource(new SourceFunction[(String, String, Int)]() {
       def run(ctx: SourceFunction.SourceContext[(String, String, Int)]) {
@@ -133,19 +140,21 @@ class CoGroupJoinITCase extends StreamingMultipleProgramsTestBase {
 
         ctx.collect(("a", "x", 6))
         ctx.collect(("a", "z", 8))
+
+        // source is finite, so it will have an implicit MAX watermark when it finishes
       }
 
-      def cancel() {
-      }
-    }).assignTimestamps(new CoGroupJoinITCase.Tuple3TimestampExtractor)
+      def cancel() {}
+      
+    }).assignTimestampsAndWatermarks(new CoGroupJoinITCase.Tuple3TimestampExtractor)
 
     source1.join(source2)
       .where(_._1)
       .equalTo(_._1)
-      .window(TumblingTimeWindows.of(Time.of(3, TimeUnit.MILLISECONDS)))
+      .window(TumblingEventTimeWindows.of(Time.of(3, TimeUnit.MILLISECONDS)))
       .apply( (l, r) => l.toString + ":" + r.toString)
       .addSink(new SinkFunction[String]() {
-        def invoke(value: String) {
+        override def invoke(value: String) {
           CoGroupJoinITCase.testResults += value
         }
       })
@@ -193,22 +202,24 @@ class CoGroupJoinITCase extends StreamingMultipleProgramsTestBase {
         ctx.collect(("a", "i", 6))
         ctx.collect(("a", "j", 7))
         ctx.collect(("a", "k", 8))
+
+        // source is finite, so it will have an implicit MAX watermark when it finishes
       }
 
-      def cancel() {
-      }
-    }).assignTimestamps(new CoGroupJoinITCase.Tuple3TimestampExtractor)
+      def cancel() {}
+      
+    }).assignTimestampsAndWatermarks(new CoGroupJoinITCase.Tuple3TimestampExtractor)
 
     source1.join(source1)
       .where(_._1)
       .equalTo(_._1)
-      .window(TumblingTimeWindows.of(Time.of(3, TimeUnit.MILLISECONDS)))
+      .window(TumblingEventTimeWindows.of(Time.of(3, TimeUnit.MILLISECONDS)))
       .apply( (l, r) => l.toString + ":" + r.toString)
       .addSink(new SinkFunction[String]() {
-      def invoke(value: String) {
-        CoGroupJoinITCase.testResults += value
-      }
-    })
+        override def invoke(value: String) {
+          CoGroupJoinITCase.testResults += value
+        }
+      })
 
     env.execute("Self-Join Test")
 
@@ -245,31 +256,24 @@ class CoGroupJoinITCase extends StreamingMultipleProgramsTestBase {
 object CoGroupJoinITCase {
   private var testResults: mutable.MutableList[String] = null
 
-  private class Tuple2TimestampExtractor extends TimestampExtractor[(String, Int)] {
-    def extractTimestamp(element: (String, Int), currentTimestamp: Long): Long = {
+  private class Tuple2TimestampExtractor extends AssignerWithPunctuatedWatermarks[(String, Int)] {
+    
+    override def extractTimestamp(element: (String, Int), previousTimestamp: Long): Long = {
       element._2
     }
 
-    def extractWatermark(element: (String, Int), currentTimestamp: Long): Long = {
-      element._2 - 1
-    }
-
-    def getCurrentWatermark: Long = {
-      Long.MinValue
-    }
+    override def checkAndGetNextWatermark(lastElement: (String, Int),
+        extractedTimestamp: Long): Watermark = new Watermark(extractedTimestamp - 1)
   }
 
-  private class Tuple3TimestampExtractor extends TimestampExtractor[(String, String, Int)] {
-    def extractTimestamp(element: (String, String, Int), currentTimestamp: Long): Long = {
-      element._3
-    }
+  private class Tuple3TimestampExtractor extends 
+        AssignerWithPunctuatedWatermarks[(String, String, Int)] {
+    
+    override def extractTimestamp(element: (String, String, Int), previousTimestamp: Long): Long
+         = element._3
 
-    def extractWatermark(element: (String, String, Int), currentTimestamp: Long): Long = {
-      element._3 - 1
-    }
-
-    def getCurrentWatermark: Long = {
-      Long.MinValue
-    }
+    override def checkAndGetNextWatermark(
+        lastElement: (String, String, Int),
+        extractedTimestamp: Long): Watermark = new Watermark(extractedTimestamp - 1)
   }
 }

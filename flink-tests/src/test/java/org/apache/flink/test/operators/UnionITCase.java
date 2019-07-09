@@ -16,167 +16,121 @@
  * limitations under the License.
  */
 
-
 package org.apache.flink.test.operators;
 
-import java.io.IOException;
-import java.io.Serializable;
-import java.util.Collection;
-import java.util.LinkedList;
+import org.apache.flink.api.common.functions.RichFilterFunction;
+import org.apache.flink.api.java.DataSet;
+import org.apache.flink.api.java.ExecutionEnvironment;
+import org.apache.flink.api.java.tuple.Tuple3;
+import org.apache.flink.test.operators.util.CollectionDataSets;
+import org.apache.flink.test.util.MultipleProgramsTestBase;
 
-import org.apache.flink.api.common.Plan;
-import org.apache.flink.api.java.record.functions.MapFunction;
-import org.apache.flink.api.java.record.io.DelimitedInputFormat;
-import org.apache.flink.api.java.record.operators.FileDataSink;
-import org.apache.flink.api.java.record.operators.FileDataSource;
-import org.apache.flink.api.java.record.operators.MapOperator;
-import org.apache.flink.configuration.Configuration;
-import org.apache.flink.test.operators.io.ContractITCaseIOFormats.ContractITCaseInputFormat;
-import org.apache.flink.test.operators.io.ContractITCaseIOFormats.ContractITCaseOutputFormat;
-import org.apache.flink.test.util.RecordAPITestBase;
-import org.apache.flink.types.IntValue;
-import org.apache.flink.types.Record;
-import org.apache.flink.types.StringValue;
-import org.apache.flink.util.Collector;
+import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
-import org.junit.runners.Parameterized.Parameters;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-@SuppressWarnings("deprecation")
+import java.util.List;
+
+/**
+ * Integration tests for {@link DataSet#union}.
+ */
 @RunWith(Parameterized.class)
-public class UnionITCase extends RecordAPITestBase {
-	private static final Logger LOG = LoggerFactory.getLogger(UnionITCase.class);
+public class UnionITCase extends MultipleProgramsTestBase {
 
-	String inPath = null;
-	String emptyInPath = null;
-	String resultPath = null;
-	
-	public UnionITCase(Configuration testConfig) {
-		super(testConfig);
+	private static final String FULL_TUPLE_3_STRING = "1,1,Hi\n" +
+			"2,2,Hello\n" +
+			"3,2,Hello world\n" +
+			"4,3,Hello world, how are you?\n" +
+			"5,3,I am fine.\n" +
+			"6,3,Luke Skywalker\n" +
+			"7,4,Comment#1\n" +
+			"8,4,Comment#2\n" +
+			"9,4,Comment#3\n" +
+			"10,4,Comment#4\n" +
+			"11,5,Comment#5\n" +
+			"12,5,Comment#6\n" +
+			"13,5,Comment#7\n" +
+			"14,5,Comment#8\n" +
+			"15,5,Comment#9\n" +
+			"16,6,Comment#10\n" +
+			"17,6,Comment#11\n" +
+			"18,6,Comment#12\n" +
+			"19,6,Comment#13\n" +
+			"20,6,Comment#14\n" +
+			"21,6,Comment#15\n";
+
+	public UnionITCase(TestExecutionMode mode){
+		super(mode);
 	}
 
-	private static final String IN = "1 1\n2 2\n2 8\n4 4\n4 4\n6 6\n7 7\n8 8\n1 1\n" +
-			"2 2\n2 2\n4 4\n4 4\n6 3\n5 9\n8 8\n1 1\n2 2\n2 2\n3 0\n4 4\n5 9\n7 7\n8 8\n" +
-			"1 1\n9 1\n5 9\n4 4\n4 4\n6 6\n7 7\n8 8\n";
+	@Test
+	public void testUnion2IdenticalDataSets() throws Exception {
+		/*
+		 * Union of 2 Same Data Sets
+		 */
+		final ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
 
-	private static final String RESULT = "1 11\n2 12\n4 14\n4 14\n1 11\n2 12\n2 12\n" +
-			"4 14\n4 14\n3 16\n1 11\n2 12\n2 12\n0 13\n4 14\n1 11\n4 14\n4 14\n";
+		DataSet<Tuple3<Integer, Long, String>> ds = CollectionDataSets.get3TupleDataSet(env);
+		DataSet<Tuple3<Integer, Long, String>> unionDs = ds.union(CollectionDataSets.get3TupleDataSet(env));
 
-	private static final String EMPTY_RESULT = "";
-	
-	private static final String MAP_RESULT_TWICE = "1 11\n2 12\n4 14\n4 14\n1 11\n2 12\n2 12\n4 14\n4 14\n3 16\n1 11\n2 12\n2 12\n0 13\n4 14\n1 11\n4 14\n4 14\n" +
-												"1 11\n2 12\n4 14\n4 14\n1 11\n2 12\n2 12\n4 14\n4 14\n3 16\n1 11\n2 12\n2 12\n0 13\n4 14\n1 11\n4 14\n4 14\n";
-	
-	@Override
-	protected void preSubmit() throws Exception {
-		inPath = createTempFile("in.txt", IN);
-		emptyInPath = createTempFile("empty_in.txt", "");
-		resultPath = getTempDirPath("result");
+		List<Tuple3<Integer, Long, String>> result = unionDs.collect();
+
+		String expected = FULL_TUPLE_3_STRING + FULL_TUPLE_3_STRING;
+
+		compareResultAsTuples(result, expected);
 	}
 
-	public static class TestMapper extends MapFunction implements Serializable {
+	@Test
+	public void testUnion5IdenticalDataSets() throws Exception {
+		/*
+		 * Union of 5 same Data Sets, with multiple unions
+		 */
+
+		final ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
+
+		DataSet<Tuple3<Integer, Long, String>> ds = CollectionDataSets.get3TupleDataSet(env);
+		DataSet<Tuple3<Integer, Long, String>> unionDs = ds.union(CollectionDataSets.get3TupleDataSet(env))
+				.union(CollectionDataSets.get3TupleDataSet(env))
+				.union(CollectionDataSets.get3TupleDataSet(env))
+				.union(CollectionDataSets.get3TupleDataSet(env));
+
+		List<Tuple3<Integer, Long, String>> result = unionDs.collect();
+
+		String expected = FULL_TUPLE_3_STRING + FULL_TUPLE_3_STRING
+				+ FULL_TUPLE_3_STRING +
+				FULL_TUPLE_3_STRING +	FULL_TUPLE_3_STRING;
+
+		compareResultAsTuples(result, expected);
+	}
+
+	@Test
+	public void testUnionWithEmptyDataSet() throws Exception {
+		/*
+		 * Test on union with empty dataset
+		 */
+		final ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
+
+		// Don't know how to make an empty result in an other way than filtering it
+		DataSet<Tuple3<Integer, Long, String>> empty = CollectionDataSets.get3TupleDataSet(env).
+				filter(new RichFilter1());
+
+		DataSet<Tuple3<Integer, Long, String>> unionDs = CollectionDataSets.get3TupleDataSet(env)
+				.union(empty);
+
+		List<Tuple3<Integer, Long, String>> result = unionDs.collect();
+
+		String expected = FULL_TUPLE_3_STRING;
+
+		compareResultAsTuples(result, expected);
+	}
+
+	private static class RichFilter1 extends RichFilterFunction<Tuple3<Integer, Long, String>> {
 		private static final long serialVersionUID = 1L;
-		
-		private StringValue keyString = new StringValue();
-		private StringValue valueString = new StringValue();
-		
-		@Override
-		public void map(Record record, Collector<Record> out) throws Exception {
-			keyString = record.getField(0, keyString);
-			valueString = record.getField(1, valueString);
-			
-			if (LOG.isDebugEnabled())
-				LOG.debug("Processed: [" + keyString.toString() + "," + valueString.getValue() + "]");
-			
-			if (Integer.parseInt(keyString.toString()) + Integer.parseInt(valueString.toString()) < 10) {
 
-				record.setField(0, valueString);
-				record.setField(1, new IntValue(Integer.parseInt(keyString.toString()) + 10));
-				
-				out.collect(record);
-			}
-			
+		@Override
+		public boolean filter(Tuple3<Integer, Long, String> value) throws Exception {
+			return false;
 		}
 	}
 
-	@SuppressWarnings("unchecked")
-	@Override
-	protected Plan getTestJob() {
-		String input1Path = config.getString("UnionTest#Input1Path", "").equals("empty") ? emptyInPath : inPath;
-		String input2Path = config.getString("UnionTest#Input2Path", "").equals("empty") ? emptyInPath : inPath;
-
-		FileDataSource input1 = new FileDataSource(
-			new ContractITCaseInputFormat(), input1Path);
-		DelimitedInputFormat.configureDelimitedFormat(input1)
-			.recordDelimiter('\n');
-		input1.setParallelism(config.getInteger("UnionTest#NoSubtasks", 1));
-		
-		FileDataSource input2 = new FileDataSource(
-				new ContractITCaseInputFormat(), input2Path);
-		DelimitedInputFormat.configureDelimitedFormat(input2)
-			.recordDelimiter('\n');
-		input2.setParallelism(config.getInteger("UnionTest#NoSubtasks", 1));
-		
-		MapOperator testMapper = MapOperator.builder(new TestMapper()).build();
-		testMapper.setParallelism(config.getInteger("UnionTest#NoSubtasks", 1));
-
-		FileDataSink output = new FileDataSink(
-				new ContractITCaseOutputFormat(), resultPath);
-		output.setParallelism(1);
-
-		output.setInput(testMapper);
-
-		testMapper.addInput(input1);
-		testMapper.addInput(input2);
-
-		return new Plan(output);
-	}
-
-	@Override
-	protected void postSubmit() throws Exception {
-		compareResultsByLinesInMemory(config.getString("UnionTest#ExpectedResult", ""), resultPath);
-
-	}
-
-	@Parameters
-	public static Collection<Object[]> getConfigurations() throws IOException {
-		LinkedList<Configuration> testConfigs = new LinkedList<Configuration>();
-
-		//second input empty
-		Configuration config = new Configuration();
-		config.setInteger("UnionTest#NoSubtasks", 4);
-		config.setString("UnionTest#ExpectedResult", RESULT);
-		config.setString("UnionTest#Input1Path", "non-empty");
-		config.setString("UnionTest#Input2Path", "empty");
-		testConfigs.add(config);
-		
-		
-		//first input empty
-		config = new Configuration();
-		config.setInteger("UnionTest#NoSubtasks", 4);
-		config.setString("UnionTest#ExpectedResult", RESULT);
-		config.setString("UnionTest#Input1Path", "empty");
-		config.setString("UnionTest#Input2Path", "non-empty");
-		testConfigs.add(config);
-		
-		//both inputs full
-		config = new Configuration();
-		config.setInteger("UnionTest#NoSubtasks", 4);
-		config.setString("UnionTest#ExpectedResult", MAP_RESULT_TWICE);
-		config.setString("UnionTest#Input1Path", "non-empty");
-		config.setString("UnionTest#Input2Path", "non-empty");
-		testConfigs.add(config);
-		
-		//both inputs empty
-		config = new Configuration();
-		config.setInteger("UnionTest#NoSubtasks", 4);
-		config.setString("UnionTest#ExpectedResult", EMPTY_RESULT);
-		config.setString("UnionTest#Input1Path", "empty");
-		config.setString("UnionTest#Input2Path", "empty");
-		testConfigs.add(config);
-
-		return toParameterList(testConfigs);
-	}
 }

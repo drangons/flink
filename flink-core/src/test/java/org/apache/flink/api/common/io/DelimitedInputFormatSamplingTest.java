@@ -20,15 +20,20 @@
 package org.apache.flink.api.common.io;
 
 import org.apache.flink.api.common.io.statistics.BaseStatistics;
-import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.OptimizerOptions;
 import org.apache.flink.testutils.TestConfigUtils;
 import org.apache.flink.testutils.TestFileSystem;
 import org.apache.flink.testutils.TestFileUtils;
 import org.apache.flink.types.IntValue;
 import org.junit.Assert;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
+
+import java.io.File;
+
 
 public class DelimitedInputFormatSamplingTest {
 	
@@ -66,6 +71,13 @@ public class DelimitedInputFormatSamplingTest {
 	
 	private static final int DEFAULT_NUM_SAMPLES = 4;
 	
+	private static Configuration CONFIG;
+
+	@ClassRule
+	public static TemporaryFolder tempFolder = new TemporaryFolder();
+
+	private static File testTempFolder;
+	
 	// ========================================================================
 	//  Setup
 	// ========================================================================
@@ -73,23 +85,20 @@ public class DelimitedInputFormatSamplingTest {
 	@BeforeClass
 	public static void initialize() {
 		try {
-			TestFileSystem.registerTestFileSysten();
-		} catch (Throwable t) {
-			Assert.fail("Could not setup the mock test filesystem.");
-		}
-		
-		try {
+			testTempFolder = tempFolder.newFolder();
 			// make sure we do 4 samples
-			TestConfigUtils.loadGlobalConf(
-				new String[] { ConfigConstants.DELIMITED_FORMAT_MIN_LINE_SAMPLES_KEY,
-								ConfigConstants.DELIMITED_FORMAT_MAX_LINE_SAMPLES_KEY },
-				new String[] { "4", "4" });
-			
-			TestDelimitedInputFormat.prepare();
+			CONFIG = TestConfigUtils.loadGlobalConf(
+				new String[] { OptimizerOptions.DELIMITED_FORMAT_MIN_LINE_SAMPLES.key(),
+								OptimizerOptions.DELIMITED_FORMAT_MAX_LINE_SAMPLES.key() },
+				new String[] { "4", "4" },
+				testTempFolder);
+
+
 		} catch (Throwable t) {
 			Assert.fail("Could not load the global configuration.");
 		}
 	}
+
 	
 	// ========================================================================
 	//  Tests
@@ -101,7 +110,7 @@ public class DelimitedInputFormatSamplingTest {
 			final String tempFile = TestFileUtils.createTempFile(TEST_DATA1);
 			final Configuration conf = new Configuration();
 			
-			final TestDelimitedInputFormat format = new TestDelimitedInputFormat();
+			final TestDelimitedInputFormat format = new TestDelimitedInputFormat(CONFIG);
 			format.setFilePath(tempFile.replace("file", "test"));
 			format.configure(conf);
 			
@@ -109,7 +118,7 @@ public class DelimitedInputFormatSamplingTest {
 			format.getStatistics(null);
 			Assert.assertEquals("Wrong number of samples taken.", DEFAULT_NUM_SAMPLES, TestFileSystem.getNumtimeStreamOpened());
 			
-			TestDelimitedInputFormat format2 = new TestDelimitedInputFormat();
+			TestDelimitedInputFormat format2 = new TestDelimitedInputFormat(CONFIG);
 			format2.setFilePath(tempFile.replace("file", "test"));
 			format2.setNumLineSamples(8);
 			format2.configure(conf);
@@ -127,10 +136,10 @@ public class DelimitedInputFormatSamplingTest {
 	@Test
 	public void testNumSamplesMultipleFiles() {
 		try {
-			final String tempFile = TestFileUtils.createTempFileDir(TEST_DATA1, TEST_DATA1, TEST_DATA1, TEST_DATA1);
+			final String tempFile = TestFileUtils.createTempFileDir(testTempFolder, TEST_DATA1, TEST_DATA1, TEST_DATA1, TEST_DATA1);
 			final Configuration conf = new Configuration();
 			
-			final TestDelimitedInputFormat format = new TestDelimitedInputFormat();
+			final TestDelimitedInputFormat format = new TestDelimitedInputFormat(CONFIG);
 			format.setFilePath(tempFile.replace("file", "test"));
 			format.configure(conf);
 			
@@ -138,7 +147,7 @@ public class DelimitedInputFormatSamplingTest {
 			format.getStatistics(null);
 			Assert.assertEquals("Wrong number of samples taken.", DEFAULT_NUM_SAMPLES, TestFileSystem.getNumtimeStreamOpened());
 			
-			TestDelimitedInputFormat format2 = new TestDelimitedInputFormat();
+			TestDelimitedInputFormat format2 = new TestDelimitedInputFormat(CONFIG);
 			format2.setFilePath(tempFile.replace("file", "test"));
 			format2.setNumLineSamples(8);
 			format2.configure(conf);
@@ -159,7 +168,7 @@ public class DelimitedInputFormatSamplingTest {
 			final String tempFile = TestFileUtils.createTempFile(TEST_DATA1);
 			final Configuration conf = new Configuration();
 			
-			final TestDelimitedInputFormat format = new TestDelimitedInputFormat();
+			final TestDelimitedInputFormat format = new TestDelimitedInputFormat(CONFIG);
 			format.setFilePath(tempFile);
 			format.configure(conf);
 			BaseStatistics stats = format.getStatistics(null);
@@ -177,10 +186,10 @@ public class DelimitedInputFormatSamplingTest {
 	@Test
 	public void testSamplingDirectory() {
 		try {
-			final String tempFile = TestFileUtils.createTempFileDir(TEST_DATA1, TEST_DATA2);
+			final String tempFile = TestFileUtils.createTempFileDir(testTempFolder, TEST_DATA1, TEST_DATA2);
 			final Configuration conf = new Configuration();
 			
-			final TestDelimitedInputFormat format = new TestDelimitedInputFormat();
+			final TestDelimitedInputFormat format = new TestDelimitedInputFormat(CONFIG);
 			format.setFilePath(tempFile);
 			format.configure(conf);
 			BaseStatistics stats = format.getStatistics(null);
@@ -212,7 +221,7 @@ public class DelimitedInputFormatSamplingTest {
 			final String tempFile = TestFileUtils.createTempFile(testData);
 			final Configuration conf = new Configuration();
 			
-			final TestDelimitedInputFormat format = new TestDelimitedInputFormat();
+			final TestDelimitedInputFormat format = new TestDelimitedInputFormat(CONFIG);
 			format.setFilePath(tempFile);
 			format.setDelimiter(DELIMITER);
 			format.configure(conf);
@@ -232,10 +241,10 @@ public class DelimitedInputFormatSamplingTest {
 	@Test
 	public void testSamplingOverlyLongRecord() {
 		try {
-			final String tempFile = TestFileUtils.createTempFile(2 * ConfigConstants.DEFAULT_DELIMITED_FORMAT_MAX_SAMPLE_LEN);
+			final String tempFile = TestFileUtils.createTempFile(2 * OptimizerOptions.DELIMITED_FORMAT_MAX_SAMPLE_LEN.defaultValue());
 			final Configuration conf = new Configuration();
 			
-			final TestDelimitedInputFormat format = new TestDelimitedInputFormat();
+			final TestDelimitedInputFormat format = new TestDelimitedInputFormat(CONFIG);
 			format.setFilePath(tempFile);
 			format.configure(conf);
 			
@@ -252,7 +261,7 @@ public class DelimitedInputFormatSamplingTest {
 			final String tempFile = TestFileUtils.createTempFile(TEST_DATA1);
 			final Configuration conf = new Configuration();
 			
-			final TestDelimitedInputFormat format = new TestDelimitedInputFormat();
+			final TestDelimitedInputFormat format = new TestDelimitedInputFormat(CONFIG);
 			format.setFilePath("test://" + tempFile);
 			format.configure(conf);
 			
@@ -260,7 +269,7 @@ public class DelimitedInputFormatSamplingTest {
 			BaseStatistics stats = format.getStatistics(null);
 			Assert.assertEquals("Wrong number of samples taken.", DEFAULT_NUM_SAMPLES, TestFileSystem.getNumtimeStreamOpened());
 			
-			final TestDelimitedInputFormat format2 = new TestDelimitedInputFormat();
+			final TestDelimitedInputFormat format2 = new TestDelimitedInputFormat(CONFIG);
 			format2.setFilePath("test://" + tempFile);
 			format2.configure(conf);
 			
@@ -274,21 +283,21 @@ public class DelimitedInputFormatSamplingTest {
 			Assert.fail(e.getMessage());
 		}
 	}
-	
+
 	// ========================================================================
 	//  Mocks
 	// ========================================================================
-	
+
 	private static final class TestDelimitedInputFormat extends DelimitedInputFormat<IntValue> {
 		private static final long serialVersionUID = 1L;
-		
+
+		TestDelimitedInputFormat(Configuration configuration) {
+			super(null, configuration);
+		}
+
 		@Override
 		public IntValue readRecord(IntValue reuse, byte[] bytes, int offset, int numBytes) {
 			throw new UnsupportedOperationException();
-		}
-		
-		public static void prepare() {
-			DelimitedInputFormat.loadGloablConfigParams();
 		}
 	}
 }

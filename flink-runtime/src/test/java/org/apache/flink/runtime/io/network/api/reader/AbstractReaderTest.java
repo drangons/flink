@@ -20,12 +20,12 @@ package org.apache.flink.runtime.io.network.api.reader;
 
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
-import org.apache.flink.runtime.accumulators.AccumulatorRegistry;
 import org.apache.flink.runtime.event.TaskEvent;
 import org.apache.flink.runtime.io.network.api.EndOfPartitionEvent;
 import org.apache.flink.runtime.io.network.api.EndOfSuperstepEvent;
 import org.apache.flink.runtime.io.network.partition.consumer.InputGate;
 import org.apache.flink.runtime.util.event.EventListener;
+
 import org.junit.Test;
 import org.mockito.Matchers;
 
@@ -183,11 +183,6 @@ public class AbstractReaderTest {
 
 		protected MockReader(InputGate inputGate) {
 			super(inputGate);
-		}
-
-		@Override
-		public void setReporter(AccumulatorRegistry.Reporter reporter) {
-
 		}
 	}
 }

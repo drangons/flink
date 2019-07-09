@@ -18,6 +18,8 @@
 
 package org.apache.flink.api.common;
 
+import org.apache.flink.annotation.PublicEvolving;
+
 /**
  * Specifies to which extent user-defined functions are analyzed in order
  * to give the Flink optimizer an insight of UDF internals and inform
@@ -30,7 +32,11 @@ package org.apache.flink.api.common;
  *  - Warnings if a Function returns null
  *  - Warnings if a tuple access uses a wrong index
  *  - Information about the number of object creations (for manual optimization)
+ *
+ * @deprecated The code analysis code has been removed and this enum has no effect.
  */
+@PublicEvolving
+@Deprecated
 public enum CodeAnalysisMode {
 
 	/**

@@ -18,196 +18,162 @@
 
 package org.apache.flink.runtime.state;
 
+import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
-import org.apache.flink.core.memory.DataInputView;
-import org.apache.flink.core.memory.DataInputViewStreamWrapper;
-import org.apache.flink.core.memory.DataOutputView;
-import org.apache.flink.core.memory.DataOutputViewStreamWrapper;
+import org.apache.flink.core.fs.CloseableRegistry;
+import org.apache.flink.metrics.MetricGroup;
+import org.apache.flink.runtime.execution.Environment;
+import org.apache.flink.runtime.query.TaskKvStateRegistry;
+import org.apache.flink.runtime.state.ttl.TtlTimeProvider;
+
+import javax.annotation.Nonnull;
 
 import java.io.IOException;
-import java.io.OutputStream;
-import java.io.Serializable;
+import java.util.Collection;
 
 /**
- * A state backend defines how state is stored and snapshotted during checkpoints.
+ * A <b>State Backend</b> defines how the state of a streaming application is stored and
+ * checkpointed. Different State Backends store their state in different fashions, and use
+ * different data structures to hold the state of a running application.
+ *
+ * <p>For example, the {@link org.apache.flink.runtime.state.memory.MemoryStateBackend memory state backend}
+ * keeps working state in the memory of the TaskManager and stores checkpoints in the memory of the
+ * JobManager. The backend is lightweight and without additional dependencies, but not highly available
+ * and supports only small state.
+ *
+ * <p>The {@link org.apache.flink.runtime.state.filesystem.FsStateBackend file system state backend}
+ * keeps working state in the memory of the TaskManager and stores state checkpoints in a filesystem
+ * (typically a replicated highly-available filesystem, like <a href="https://hadoop.apache.org/">HDFS</a>,
+ * <a href="https://ceph.com/">Ceph</a>, <a href="https://aws.amazon.com/documentation/s3/">S3</a>,
+ * <a href="https://cloud.google.com/storage/">GCS</a>, etc).
  * 
- * @param <Backend> The type of backend itself. This generic parameter is used to refer to the
- *                  type of backend when creating state backed by this backend.
+ * <p>The {@code RocksDBStateBackend} stores working state in <a href="http://rocksdb.org/">RocksDB</a>,
+ * and checkpoints the state by default to a filesystem (similar to the {@code FsStateBackend}).
+ * 
+ * <h2>Raw Bytes Storage and Backends</h2>
+ * 
+ * The {@code StateBackend} creates services for <i>raw bytes storage</i> and for <i>keyed state</i>
+ * and <i>operator state</i>.
+ * 
+ * <p>The <i>raw bytes storage</i> (through the {@link CheckpointStreamFactory}) is the fundamental
+ * service that simply stores bytes in a fault tolerant fashion. This service is used by the JobManager
+ * to store checkpoint and recovery metadata and is typically also used by the keyed- and operator state
+ * backends to store checkpointed state.
+ *
+ * <p>The {@link AbstractKeyedStateBackend} and {@link OperatorStateBackend} created by this state
+ * backend define how to hold the working state for keys and operators. They also define how to checkpoint
+ * that state, frequently using the raw bytes storage (via the {@code CheckpointStreamFactory}).
+ * However, it is also possible that for example a keyed state backend simply implements the bridge to
+ * a key/value store, and that it does not need to store anything in the raw byte storage upon a
+ * checkpoint.
+ * 
+ * <h2>Serializability</h2>
+ * 
+ * State Backends need to be {@link java.io.Serializable serializable}, because they distributed
+ * across parallel processes (for distributed execution) together with the streaming application code. 
+ * 
+ * <p>Because of that, {@code StateBackend} implementations (typically subclasses
+ * of {@link AbstractStateBackend}) are meant to be like <i>factories</i> that create the proper
+ * states stores that provide access to the persistent storage and hold the keyed- and operator
+ * state data structures. That way, the State Backend can be very lightweight (contain only
+ * configurations) which makes it easier to be serializable.
+ *
+ * <h2>Thread Safety</h2>
+ * 
+ * State backend implementations have to be thread-safe. Multiple threads may be creating
+ * streams and keyed-/operator state backends concurrently.
  */
-public abstract class StateBackend<Backend extends StateBackend<Backend>> implements java.io.Serializable {
-	
-	private static final long serialVersionUID = 4620413814639220247L;
-	
-	// ------------------------------------------------------------------------
-	//  initialization and cleanup
-	// ------------------------------------------------------------------------
-	
-	/**
-	 * This method is called by the task upon deployment to initialize the state backend for
-	 * data for a specific job.
-	 * 
-	 * @param job The ID of the job for which the state backend instance checkpoints data.
-	 * @throws Exception Overwritten versions of this method may throw exceptions, in which
-	 *                   case the job that uses the state backend is considered failed during
-	 *                   deployment.
-	 */
-	public abstract void initializeForJob(JobID job) throws Exception;
+@PublicEvolving
+public interface StateBackend extends java.io.Serializable {
 
-	/**
-	 * Disposes all state associated with the current job.
-	 * 
-	 * @throws Exception Exceptions may occur during disposal of the state and should be forwarded.
-	 */
-	public abstract void disposeAllStateForCurrentJob() throws Exception;
-
-	/**
-	 * Closes the state backend, releasing all internal resources, but does not delete any persistent
-	 * checkpoint data.
-	 * 
-	 * @throws Exception Exceptions can be forwarded and will be logged by the system
-	 */
-	public abstract void close() throws Exception;
-	
 	// ------------------------------------------------------------------------
-	//  key/value state
+	//  Checkpoint storage - the durable persistence of checkpoint data
 	// ------------------------------------------------------------------------
 
 	/**
-	 * Creates a key/value state backed by this state backend.
-	 * 
-	 * @param keySerializer The serializer for the key.
-	 * @param valueSerializer The serializer for the value.
-	 * @param defaultValue The value that is returned when no other value has been associated with a key, yet.
-	 * @param <K> The type of the key.
-	 * @param <V> The type of the value.
-	 * 
-	 * @return A new key/value state backed by this backend.
-	 * 
-	 * @throws Exception Exceptions may occur during initialization of the state and should be forwarded.
-	 */
-	public abstract <K, V> KvState<K, V, Backend> createKvState(
-			TypeSerializer<K> keySerializer, TypeSerializer<V> valueSerializer,
-			V defaultValue) throws Exception;
-	
-	
-	// ------------------------------------------------------------------------
-	//  storing state for a checkpoint
-	// ------------------------------------------------------------------------
-
-	/**
-	 * Creates an output stream that writes into the state of the given checkpoint. When the stream
-	 * is closes, it returns a state handle that can retrieve the state back.
-	 * 
-	 * @param checkpointID The ID of the checkpoint.
-	 * @param timestamp The timestamp of the checkpoint.
-	 * @return An output stream that writes state for the given checkpoint.
-	 * 
-	 * @throws Exception Exceptions may occur while creating the stream and should be forwarded.
-	 */
-	public abstract CheckpointStateOutputStream createCheckpointStateOutputStream(
-			long checkpointID, long timestamp) throws Exception;
-	
-	/**
-	 * Creates a {@link DataOutputView} stream that writes into the state of the given checkpoint.
-	 * When the stream is closes, it returns a state handle that can retrieve the state back.
+	 * Resolves the given pointer to a checkpoint/savepoint into a checkpoint location. The location
+	 * supports reading the checkpoint metadata, or disposing the checkpoint storage location.
 	 *
-	 * @param checkpointID The ID of the checkpoint.
-	 * @param timestamp The timestamp of the checkpoint.
-	 * @return An DataOutputView stream that writes state for the given checkpoint.
+	 * <p>If the state backend cannot understand the format of the pointer (for example because it
+	 * was created by a different state backend) this method should throw an {@code IOException}.
 	 *
-	 * @throws Exception Exceptions may occur while creating the stream and should be forwarded.
+	 * @param externalPointer The external checkpoint pointer to resolve.
+	 * @return The checkpoint location handle.
+	 *
+	 * @throws IOException Thrown, if the state backend does not understand the pointer, or if
+	 *                     the pointer could not be resolved due to an I/O error.
 	 */
-	public CheckpointStateOutputView createCheckpointStateOutputView(
-			long checkpointID, long timestamp) throws Exception {
-		return new CheckpointStateOutputView(createCheckpointStateOutputStream(checkpointID, timestamp));
-	}
+	CompletedCheckpointStorageLocation resolveCheckpoint(String externalPointer) throws IOException;
 
 	/**
-	 * Writes the given state into the checkpoint, and returns a handle that can retrieve the state back.
-	 * 
-	 * @param state The state to be checkpointed.
-	 * @param checkpointID The ID of the checkpoint.
-	 * @param timestamp The timestamp of the checkpoint.
-	 * @param <S> The type of the state.
-	 * 
-	 * @return A state handle that can retrieve the checkpoined state.
-	 * 
-	 * @throws Exception Exceptions may occur during serialization / storing the state and should be forwarded.
+	 * Creates a storage for checkpoints for the given job. The checkpoint storage is
+	 * used to write checkpoint data and metadata.
+	 *
+	 * @param jobId The job to store checkpoint data for.
+	 * @return A checkpoint storage for the given job.
+	 *
+	 * @throws IOException Thrown if the checkpoint storage cannot be initialized.
 	 */
-	public abstract <S extends Serializable> StateHandle<S> checkpointStateSerializable(
-			S state, long checkpointID, long timestamp) throws Exception;
-	
-	
+	CheckpointStorage createCheckpointStorage(JobID jobId) throws IOException;
+
 	// ------------------------------------------------------------------------
-	//  Checkpoint state output stream
+	//  Structure Backends 
 	// ------------------------------------------------------------------------
-
 	/**
-	 * A dedicated output stream that produces a {@link StreamStateHandle} when closed.
+	 * Creates a new {@link AbstractKeyedStateBackend} that is responsible for holding <b>keyed state</b>
+	 * and checkpointing it.
+	 *
+	 * <p><i>Keyed State</i> is state where each value is bound to a key.
+	 *
+	 * @param env                  The environment of the task.
+	 * @param jobID                The ID of the job that the task belongs to.
+	 * @param operatorIdentifier   The identifier text of the operator.
+	 * @param keySerializer        The key-serializer for the operator.
+	 * @param numberOfKeyGroups    The number of key-groups aka max parallelism.
+	 * @param keyGroupRange        Range of key-groups for which the to-be-created backend is responsible.
+	 * @param kvStateRegistry      KvStateRegistry helper for this task.
+	 * @param ttlTimeProvider      Provider for TTL logic to judge about state expiration.
+	 * @param metricGroup          The parent metric group for all state backend metrics.
+	 * @param stateHandles         The state handles for restore.
+	 * @param cancelStreamRegistry The registry to which created closeable objects will be registered during restore.
+	 * @param <K>                  The type of the keys by which the state is organized.
+	 *
+	 * @return The Keyed State Backend for the given job, operator, and key group range.
+	 *
+	 * @throws Exception This method may forward all exceptions that occur while instantiating the backend.
 	 */
-	public static abstract class CheckpointStateOutputStream extends OutputStream {
-
-		/**
-		 * Closes the stream and gets a state handle that can create an input stream
-		 * producing the data written to this stream.
-		 * 
-		 * @return A state handle that can create an input stream producing the data written to this stream.
-		 * @throws IOException Thrown, if the stream cannot be closed.
-		 */
-		public abstract StreamStateHandle closeAndGetHandle() throws IOException;
-	}
-
+	<K> AbstractKeyedStateBackend<K> createKeyedStateBackend(
+		Environment env,
+		JobID jobID,
+		String operatorIdentifier,
+		TypeSerializer<K> keySerializer,
+		int numberOfKeyGroups,
+		KeyGroupRange keyGroupRange,
+		TaskKvStateRegistry kvStateRegistry,
+		TtlTimeProvider ttlTimeProvider,
+		MetricGroup metricGroup,
+		@Nonnull Collection<KeyedStateHandle> stateHandles,
+		CloseableRegistry cancelStreamRegistry) throws Exception;
+	
 	/**
-	 * A dedicated DataOutputView stream that produces a {@code StateHandle<DataInputView>} when closed.
+	 * Creates a new {@link OperatorStateBackend} that can be used for storing operator state.
+	 *
+	 * <p>Operator state is state that is associated with parallel operator (or function) instances,
+	 * rather than with keys.
+	 *
+	 * @param env The runtime environment of the executing task.
+	 * @param operatorIdentifier The identifier of the operator whose state should be stored.
+	 * @param stateHandles The state handles for restore.
+	 * @param cancelStreamRegistry The registry to register streams to close if task canceled.
+	 *
+	 * @return The OperatorStateBackend for operator identified by the job and operator identifier.
+	 *
+	 * @throws Exception This method may forward all exceptions that occur while instantiating the backend.
 	 */
-	public static final class CheckpointStateOutputView extends DataOutputViewStreamWrapper {
-		
-		private final CheckpointStateOutputStream out;
-		
-		public CheckpointStateOutputView(CheckpointStateOutputStream out) {
-			super(out);
-			this.out = out;
-		}
-
-		/**
-		 * Closes the stream and gets a state handle that can create a DataInputView.
-		 * producing the data written to this stream.
-		 *
-		 * @return A state handle that can create an input stream producing the data written to this stream.
-		 * @throws IOException Thrown, if the stream cannot be closed.
-		 */
-		public StateHandle<DataInputView> closeAndGetHandle() throws IOException {
-			return new DataInputViewHandle(out.closeAndGetHandle());
-		}
-
-		@Override
-		public void close() throws IOException {
-			out.close();
-		}
-	}
-
-	/**
-	 * Simple state handle that resolved a {@link DataInputView} from a StreamStateHandle.
-	 */
-	private static final class DataInputViewHandle implements StateHandle<DataInputView> {
-
-		private static final long serialVersionUID = 2891559813513532079L;
-		
-		private final StreamStateHandle stream;
-
-		private DataInputViewHandle(StreamStateHandle stream) {
-			this.stream = stream;
-		}
-
-		@Override
-		public DataInputView getState(ClassLoader userCodeClassLoader) throws Exception {
-			return new DataInputViewStreamWrapper(stream.getState(userCodeClassLoader)); 
-		}
-
-		@Override
-		public void discardState() throws Exception {
-			stream.discardState();
-		}
-	}
+	OperatorStateBackend createOperatorStateBackend(
+		Environment env,
+		String operatorIdentifier,
+		@Nonnull Collection<OperatorStateHandle> stateHandles,
+		CloseableRegistry cancelStreamRegistry) throws Exception;
 }

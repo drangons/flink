@@ -17,6 +17,8 @@
 
 package org.apache.flink.streaming.api.functions.windowing.delta.extractor;
 
+import org.apache.flink.annotation.Internal;
+
 import java.lang.reflect.Array;
 
 /**
@@ -28,19 +30,18 @@ import java.lang.reflect.Array;
  *            of the extractor will be a String[]. If it is set to String[] the
  *            output will be String[][].
  */
+@Internal
 public class FieldsFromArray<OUT> implements Extractor<Object, OUT[]> {
 
-	/**
-	 * Auto-generated version id
-	 */
 	private static final long serialVersionUID = 8075055384516397670L;
+
 	private int[] order;
 	private Class<OUT> clazz;
 
 	/**
 	 * Extracts multiple fields from an array and puts them in the given order
 	 * into a new array of the specified type.
-	 * 
+	 *
 	 * @param clazz
 	 *            the Class object representing the component type of the new
 	 *            array

@@ -21,8 +21,11 @@ package org.apache.flink.test.recovery;
 import org.apache.flink.api.common.ExecutionMode;
 import org.apache.flink.api.common.functions.ReduceFunction;
 import org.apache.flink.api.common.functions.RichMapFunction;
+import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.api.java.DataSet;
 import org.apache.flink.api.java.ExecutionEnvironment;
+import org.apache.flink.configuration.Configuration;
+
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
@@ -61,16 +64,16 @@ public class TaskManagerProcessFailureBatchRecoveryITCase extends AbstractTaskMa
 	// --------------------------------------------------------------------------------------------
 
 	@Override
-	public void testTaskManagerFailure(int jobManagerPort, final File coordinateDir) throws Exception {
+	public void testTaskManagerFailure(Configuration configuration, final File coordinateDir) throws Exception {
 
-		ExecutionEnvironment env = ExecutionEnvironment.createRemoteEnvironment("localhost", jobManagerPort);
+		ExecutionEnvironment env = ExecutionEnvironment.createRemoteEnvironment("localhost", 1337, configuration);
 		env.setParallelism(PARALLELISM);
-		env.setNumberOfExecutionRetries(1);
+		env.setRestartStrategy(RestartStrategies.fixedDelayRestart(2, 0L));
 		env.getConfig().setExecutionMode(executionMode);
 		env.getConfig().disableSysoutLogging();
 
-		final long NUM_ELEMENTS = 100000L;
-		final DataSet<Long> result = env.generateSequence(1, NUM_ELEMENTS)
+		final long numElements = 100000L;
+		final DataSet<Long> result = env.generateSequence(1, numElements)
 
 				// make sure every mapper is involved (no one is skipped because of lazy split assignment)
 				.rebalance()
@@ -110,6 +113,6 @@ public class TaskManagerProcessFailureBatchRecoveryITCase extends AbstractTaskMa
 				});
 
 		long sum = result.collect().get(0);
-		assertEquals(NUM_ELEMENTS * (NUM_ELEMENTS + 1L) / 2L, sum);
+		assertEquals(numElements * (numElements + 1L) / 2L, sum);
 	}
 }

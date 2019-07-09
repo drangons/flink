@@ -18,87 +18,78 @@
 
 package org.apache.flink.runtime.io.network.api.writer;
 
-import org.apache.flink.runtime.event.AbstractEvent;
-import org.apache.flink.runtime.event.TaskEvent;
-import org.apache.flink.runtime.io.network.api.EndOfSuperstepEvent;
-import org.apache.flink.runtime.io.network.api.TaskEventHandler;
-import org.apache.flink.runtime.io.network.api.serialization.EventSerializer;
-import org.apache.flink.runtime.io.network.buffer.Buffer;
-import org.apache.flink.runtime.io.network.buffer.BufferProvider;
-import org.apache.flink.runtime.io.network.partition.ResultPartition;
+import org.apache.flink.runtime.io.network.buffer.BufferBuilder;
+import org.apache.flink.runtime.io.network.buffer.BufferConsumer;
 import org.apache.flink.runtime.io.network.partition.ResultPartitionID;
-import org.apache.flink.runtime.util.event.EventListener;
+
+import javax.annotation.Nullable;
 
 import java.io.IOException;
 
 /**
- * A buffer-oriented runtime result writer.
- * <p>
- * The {@link ResultPartitionWriter} is the runtime API for producing results. It
- * supports two kinds of data to be sent: buffers and events.
+ * A buffer-oriented runtime result writer API for producing results.
+ *
+ * <p>If {@link ResultPartitionWriter#close()} is called before {@link ResultPartitionWriter#fail(Throwable)} or
+ * {@link ResultPartitionWriter#finish()}, it abruptly triggers failure and cancellation of production.
+ * In this case {@link ResultPartitionWriter#fail(Throwable)} still needs to be called afterwards to fully release
+ * all resources associated the the partition and propagate failure cause to the consumer if possible.
  */
-public final class ResultPartitionWriter implements EventListener<TaskEvent> {
+public interface ResultPartitionWriter extends AutoCloseable {
 
-	private final ResultPartition partition;
+	/**
+	 * Setup partition, potentially heavy-weight, blocking operation comparing to just creation.
+	 */
+	void setup() throws IOException;
 
-	private final TaskEventHandler taskEventHandler = new TaskEventHandler();
+	ResultPartitionID getPartitionId();
 
-	public ResultPartitionWriter(ResultPartition partition) {
-		this.partition = partition;
-	}
+	int getNumberOfSubpartitions();
 
-	// ------------------------------------------------------------------------
-	// Attributes
-	// ------------------------------------------------------------------------
+	int getNumTargetKeyGroups();
 
-	public ResultPartitionID getPartitionId() {
-		return partition.getPartitionId();
-	}
+	/**
+	 * Requests a {@link BufferBuilder} from this partition for writing data.
+	 */
+	BufferBuilder getBufferBuilder() throws IOException, InterruptedException;
 
-	public BufferProvider getBufferProvider() {
-		return partition.getBufferProvider();
-	}
+	/**
+	 * Adds the bufferConsumer to the subpartition with the given index.
+	 *
+	 * <p>This method takes the ownership of the passed {@code bufferConsumer} and thus is responsible for releasing
+	 * it's resources.
+	 *
+	 * <p>To avoid problems with data re-ordering, before adding new {@link BufferConsumer} the previously added one
+	 * the given {@code subpartitionIndex} must be marked as {@link BufferConsumer#isFinished()}.
+	 *
+	 * @return true if operation succeeded and bufferConsumer was enqueued for consumption.
+	 */
+	boolean addBufferConsumer(BufferConsumer bufferConsumer, int subpartitionIndex) throws IOException;
 
-	public int getNumberOfOutputChannels() {
-		return partition.getNumberOfSubpartitions();
-	}
+	/**
+	 * Manually trigger consumption from enqueued {@link BufferConsumer BufferConsumers} in all subpartitions.
+	 */
+	void flushAll();
 
-	// ------------------------------------------------------------------------
-	// Data processing
-	// ------------------------------------------------------------------------
+	/**
+	 * Manually trigger consumption from enqueued {@link BufferConsumer BufferConsumers} in one specified subpartition.
+	 */
+	void flush(int subpartitionIndex);
 
-	public void writeBuffer(Buffer buffer, int targetChannel) throws IOException {
-		partition.add(buffer, targetChannel);
-	}
+	/**
+	 * Fail the production of the partition.
+	 *
+	 * <p>This method propagates non-{@code null} failure causes to consumers on a best-effort basis. This call also
+	 * leads to the release of all resources associated with the partition. Closing of the partition is still needed
+	 * afterwards if it has not been done before.
+	 *
+	 * @param throwable failure cause
+	 */
+	void fail(@Nullable Throwable throwable);
 
-	public void writeEvent(AbstractEvent event, int targetChannel) throws IOException {
-		partition.add(EventSerializer.toBuffer(event), targetChannel);
-	}
-
-	public void writeEventToAllChannels(AbstractEvent event) throws IOException {
-		for (int i = 0; i < partition.getNumberOfSubpartitions(); i++) {
-			Buffer buffer = EventSerializer.toBuffer(event);
-			partition.add(buffer, i);
-		}
-	}
-
-	public void writeEndOfSuperstep() throws IOException {
-		for (int i = 0; i < partition.getNumberOfSubpartitions(); i++) {
-			Buffer buffer = EventSerializer.toBuffer(EndOfSuperstepEvent.INSTANCE);
-			partition.add(buffer, i);
-		}
-	}
-
-	// ------------------------------------------------------------------------
-	// Event handling
-	// ------------------------------------------------------------------------
-
-	public void subscribeToEvent(EventListener<TaskEvent> eventListener, Class<? extends TaskEvent> eventType) {
-		taskEventHandler.subscribe(eventListener, eventType);
-	}
-
-	@Override
-	public void onEvent(TaskEvent event) {
-		taskEventHandler.publish(event);
-	}
+	/**
+	 * Successfully finish the production of the partition.
+	 *
+	 * <p>Closing of partition is still needed afterwards.
+	 */
+	void finish() throws IOException;
 }

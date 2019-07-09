@@ -21,27 +21,34 @@ package org.apache.flink.runtime.io.network.util;
 import org.apache.flink.runtime.event.AbstractEvent;
 import org.apache.flink.runtime.io.network.api.EndOfPartitionEvent;
 import org.apache.flink.runtime.io.network.api.serialization.EventSerializer;
-import org.apache.flink.runtime.io.network.buffer.Buffer;
+import org.apache.flink.runtime.io.network.partition.BufferAvailabilityListener;
+import org.apache.flink.runtime.io.network.partition.ResultSubpartition.BufferAndBacklog;
 import org.apache.flink.runtime.io.network.partition.ResultSubpartitionView;
 
 import java.util.Random;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.Callable;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static org.apache.flink.util.Preconditions.checkNotNull;
 
 /**
- * A test subpartition view consumer.
+ * A test subpartition viewQueue consumer.
  *
  * <p> The behaviour of the consumer is customizable by specifying a callback.
  *
  * @see TestConsumerCallback
  */
-public class TestSubpartitionConsumer implements Callable<Boolean> {
+@Deprecated
+public class TestSubpartitionConsumer implements Callable<Boolean>, BufferAvailabilityListener {
 
 	private static final int MAX_SLEEP_TIME_MS = 20;
 
-	/** The subpartition view to consume. */
-	private final ResultSubpartitionView subpartitionView;
+	/** The subpartition viewQueue to consume. */
+	private volatile ResultSubpartitionView subpartitionView;
+
+	private BlockingQueue<ResultSubpartitionView> viewQueue = new ArrayBlockingQueue<>(1);
 
 	/**
 	 * Flag indicating whether the consumer is slow. If true, the consumer will sleep a random
@@ -49,50 +56,60 @@ public class TestSubpartitionConsumer implements Callable<Boolean> {
 	 */
 	private final boolean isSlowConsumer;
 
-	/** The callback to handle a read buffer. */
+	/** The callback to handle a notifyNonEmpty buffer. */
 	private final TestConsumerCallback callback;
 
 	/** Random source for sleeps. */
 	private final Random random;
 
-	public TestSubpartitionConsumer(
-			ResultSubpartitionView subpartitionView,
-			boolean isSlowConsumer,
-			TestConsumerCallback callback) {
+	private final AtomicBoolean dataAvailableNotification = new AtomicBoolean(false);
 
-		this.subpartitionView = checkNotNull(subpartitionView);
+	public TestSubpartitionConsumer(
+		boolean isSlowConsumer,
+		TestConsumerCallback callback) {
+
 		this.isSlowConsumer = isSlowConsumer;
 		this.random = isSlowConsumer ? new Random() : null;
 		this.callback = checkNotNull(callback);
 	}
 
+	public void setSubpartitionView(ResultSubpartitionView subpartitionView) {
+		this.subpartitionView = checkNotNull(subpartitionView);
+	}
+
 	@Override
 	public Boolean call() throws Exception {
-		final TestNotificationListener listener = new TestNotificationListener();
-
 		try {
 			while (true) {
 				if (Thread.interrupted()) {
 					throw new InterruptedException();
 				}
 
-				final Buffer buffer = subpartitionView.getNextBuffer();
+				synchronized (dataAvailableNotification) {
+					while (!dataAvailableNotification.getAndSet(false)) {
+						dataAvailableNotification.wait();
+					}
+				}
+
+				final BufferAndBacklog bufferAndBacklog = subpartitionView.getNextBuffer();
 
 				if (isSlowConsumer) {
 					Thread.sleep(random.nextInt(MAX_SLEEP_TIME_MS + 1));
 				}
 
-				if (buffer != null) {
-					if (buffer.isBuffer()) {
-						callback.onBuffer(buffer);
+				if (bufferAndBacklog != null) {
+					if (bufferAndBacklog.isMoreAvailable()) {
+						dataAvailableNotification.set(true);
 					}
-					else {
-						final AbstractEvent event = EventSerializer.fromBuffer(buffer,
-								getClass().getClassLoader());
+					if (bufferAndBacklog.buffer().isBuffer()) {
+						callback.onBuffer(bufferAndBacklog.buffer());
+					} else {
+						final AbstractEvent event = EventSerializer.fromBuffer(bufferAndBacklog.buffer(),
+							getClass().getClassLoader());
 
 						callback.onEvent(event);
 
-						buffer.recycle();
+						bufferAndBacklog.buffer().recycleBuffer();
 
 						if (event.getClass() == EndOfPartitionEvent.class) {
 							subpartitionView.notifySubpartitionConsumed();
@@ -100,22 +117,20 @@ public class TestSubpartitionConsumer implements Callable<Boolean> {
 							return true;
 						}
 					}
-				}
-				else {
-					int current = listener.getNumberOfNotifications();
-
-					if (subpartitionView.registerListener(listener)) {
-						listener.waitForNotification(current);
-					}
-					else if (subpartitionView.isReleased()) {
-						return true;
-					}
+				} else if (subpartitionView.isReleased()) {
+					return true;
 				}
 			}
-		}
-		finally {
+		} finally {
 			subpartitionView.releaseAllResources();
 		}
 	}
 
+	@Override
+	public void notifyDataAvailable() {
+		synchronized (dataAvailableNotification) {
+			dataAvailableNotification.set(true);
+			dataAvailableNotification.notifyAll();
+		}
+	}
 }

@@ -18,31 +18,37 @@
 
 package org.apache.flink.runtime.io.network.netty;
 
-import io.netty.channel.Channel;
 import org.apache.flink.runtime.io.network.TaskEventDispatcher;
 import org.apache.flink.runtime.io.network.buffer.Buffer;
 import org.apache.flink.runtime.io.network.buffer.BufferProvider;
-import org.apache.flink.runtime.io.network.buffer.NetworkBufferPool;
 import org.apache.flink.runtime.io.network.netty.NettyTestUtil.NettyServerAndClient;
+import org.apache.flink.runtime.io.network.partition.BufferAvailabilityListener;
 import org.apache.flink.runtime.io.network.partition.ResultPartitionID;
 import org.apache.flink.runtime.io.network.partition.ResultPartitionManager;
+import org.apache.flink.runtime.io.network.partition.ResultSubpartition.BufferAndBacklog;
 import org.apache.flink.runtime.io.network.partition.ResultSubpartitionView;
 import org.apache.flink.runtime.io.network.partition.consumer.InputChannelID;
 import org.apache.flink.runtime.io.network.util.TestPooledBufferProvider;
 import org.apache.flink.runtime.testingUtils.TestingUtils;
-import org.apache.flink.runtime.util.event.NotificationListener;
+
+import org.apache.flink.shaded.netty4.io.netty.channel.Channel;
+
 import org.junit.Test;
+import org.mockito.invocation.InvocationOnMock;
+import org.mockito.stubbing.Answer;
+
+import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
-import static com.google.common.base.Preconditions.checkNotNull;
 import static org.apache.flink.runtime.io.network.netty.NettyMessage.CancelPartitionRequest;
 import static org.apache.flink.runtime.io.network.netty.NettyMessage.PartitionRequest;
 import static org.apache.flink.runtime.io.network.netty.NettyTestUtil.connect;
 import static org.apache.flink.runtime.io.network.netty.NettyTestUtil.initServerAndClient;
 import static org.apache.flink.runtime.io.network.netty.NettyTestUtil.shutdown;
+import static org.apache.flink.util.Preconditions.checkNotNull;
 import static org.junit.Assert.fail;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.eq;
@@ -73,21 +79,28 @@ public class CancelPartitionRequestTest {
 
 			CountDownLatch sync = new CountDownLatch(1);
 
-			ResultSubpartitionView view = spy(new InfiniteSubpartitionView(outboundBuffers, sync));
+			final ResultSubpartitionView view = spy(new InfiniteSubpartitionView(outboundBuffers, sync));
 
 			// Return infinite subpartition
-			when(partitions.createSubpartitionView(eq(pid), eq(0), any(BufferProvider.class)))
-					.thenReturn(view);
+			when(partitions.createSubpartitionView(eq(pid), eq(0), any(BufferAvailabilityListener.class)))
+				.thenAnswer(new Answer<ResultSubpartitionView>() {
+					@Override
+					public ResultSubpartitionView answer(InvocationOnMock invocationOnMock) throws Throwable {
+						BufferAvailabilityListener listener = (BufferAvailabilityListener) invocationOnMock.getArguments()[2];
+						listener.notifyDataAvailable();
+						return view;
+					}
+				});
 
-			PartitionRequestProtocol protocol = new PartitionRequestProtocol(
-					partitions, mock(TaskEventDispatcher.class), mock(NetworkBufferPool.class));
+			NettyProtocol protocol = new NettyProtocol(
+					partitions, mock(TaskEventDispatcher.class), true);
 
 			serverAndClient = initServerAndClient(protocol);
 
 			Channel ch = connect(serverAndClient);
 
 			// Request for non-existing input channel => results in cancel request
-			ch.writeAndFlush(new PartitionRequest(pid, 0, new InputChannelID())).await();
+			ch.writeAndFlush(new PartitionRequest(pid, 0, new InputChannelID(), Integer.MAX_VALUE)).await();
 
 			// Wait for the notification
 			if (!sync.await(TestingUtils.TESTING_DURATION().toMillis(), TimeUnit.MILLISECONDS)) {
@@ -109,22 +122,29 @@ public class CancelPartitionRequestTest {
 		NettyServerAndClient serverAndClient = null;
 
 		try {
-			TestPooledBufferProvider outboundBuffers = new TestPooledBufferProvider(16);
+			final TestPooledBufferProvider outboundBuffers = new TestPooledBufferProvider(16);
 
 			ResultPartitionManager partitions = mock(ResultPartitionManager.class);
 
 			ResultPartitionID pid = new ResultPartitionID();
 
-			CountDownLatch sync = new CountDownLatch(1);
+			final CountDownLatch sync = new CountDownLatch(1);
 
-			ResultSubpartitionView view = spy(new InfiniteSubpartitionView(outboundBuffers, sync));
+			final ResultSubpartitionView view = spy(new InfiniteSubpartitionView(outboundBuffers, sync));
 
 			// Return infinite subpartition
-			when(partitions.createSubpartitionView(eq(pid), eq(0), any(BufferProvider.class)))
-					.thenReturn(view);
+			when(partitions.createSubpartitionView(eq(pid), eq(0), any(BufferAvailabilityListener.class)))
+					.thenAnswer(new Answer<ResultSubpartitionView>() {
+						@Override
+						public ResultSubpartitionView answer(InvocationOnMock invocationOnMock) throws Throwable {
+							BufferAvailabilityListener listener = (BufferAvailabilityListener) invocationOnMock.getArguments()[2];
+							listener.notifyDataAvailable();
+							return view;
+						}
+					});
 
-			PartitionRequestProtocol protocol = new PartitionRequestProtocol(
-					partitions, mock(TaskEventDispatcher.class), mock(NetworkBufferPool.class));
+			NettyProtocol protocol = new NettyProtocol(
+					partitions, mock(TaskEventDispatcher.class), true);
 
 			serverAndClient = initServerAndClient(protocol);
 
@@ -133,7 +153,7 @@ public class CancelPartitionRequestTest {
 			// Request for non-existing input channel => results in cancel request
 			InputChannelID inputChannelId = new InputChannelID();
 
-			ch.writeAndFlush(new PartitionRequest(pid, 0, inputChannelId)).await();
+			ch.writeAndFlush(new PartitionRequest(pid, 0, inputChannelId, Integer.MAX_VALUE)).await();
 
 			// Wait for the notification
 			if (!sync.await(TestingUtils.TESTING_DURATION().toMillis(), TimeUnit.MILLISECONDS)) {
@@ -168,14 +188,16 @@ public class CancelPartitionRequestTest {
 			this.sync = checkNotNull(sync);
 		}
 
+		@Nullable
 		@Override
-		public Buffer getNextBuffer() throws IOException, InterruptedException {
-			return bufferProvider.requestBufferBlocking();
+		public BufferAndBacklog getNextBuffer() throws IOException, InterruptedException {
+			Buffer buffer = bufferProvider.requestBufferBlocking();
+			buffer.setSize(buffer.getMaxCapacity()); // fake some data
+			return new BufferAndBacklog(buffer, true, 0, false);
 		}
 
 		@Override
-		public boolean registerListener(final NotificationListener listener) throws IOException {
-			return false;
+		public void notifyDataAvailable() {
 		}
 
 		@Override
@@ -190,6 +212,16 @@ public class CancelPartitionRequestTest {
 		@Override
 		public boolean isReleased() {
 			return false;
+		}
+
+		@Override
+		public boolean nextBufferIsEvent() {
+			return false;
+		}
+
+		@Override
+		public boolean isAvailable() {
+			return true;
 		}
 
 		@Override

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,11 +15,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.streaming.api.transformations;
 
-import com.google.common.collect.Lists;
+import org.apache.flink.annotation.Internal;
+import org.apache.flink.api.dag.Transformation;
 import org.apache.flink.streaming.api.collector.selector.OutputSelector;
-import org.apache.flink.streaming.api.operators.ChainingStrategy;
+
+import org.apache.flink.shaded.guava18.com.google.common.collect.Lists;
 
 import java.util.Collection;
 import java.util.List;
@@ -29,25 +32,26 @@ import java.util.List;
  * {@link org.apache.flink.streaming.api.datastream.DataStream} into several {@code DataStreams}
  * using an {@link org.apache.flink.streaming.api.collector.selector.OutputSelector}.
  *
- * <p>
- * This does not create a physical operation, it only affects how upstream operations are
+ * <p>This does not create a physical operation, it only affects how upstream operations are
  * connected to downstream operations.
  *
  * @param <T> The type of the elements that result from this {@code SplitTransformation}
  */
-public class SplitTransformation<T> extends StreamTransformation<T> {
+@Internal
+public class SplitTransformation<T> extends Transformation<T> {
 
-	private final StreamTransformation<T> input;
+	private final Transformation<T> input;
 
 	private final OutputSelector<T> outputSelector;
 
 	/**
 	 * Creates a new {@code SplitTransformation} from the given input and {@code OutputSelector}.
 	 *
-	 * @param input The input {@code StreamTransformation}
+	 * @param input The input {@code Transformation}
 	 * @param outputSelector The output selector
 	 */
-	public SplitTransformation(StreamTransformation<T> input,
+	public SplitTransformation(
+		Transformation<T> input,
 			OutputSelector<T> outputSelector) {
 		super("Split", input.getOutputType(), input.getParallelism());
 		this.input = input;
@@ -55,30 +59,24 @@ public class SplitTransformation<T> extends StreamTransformation<T> {
 	}
 
 	/**
-	 * Returns the input {@code StreamTransformation}.
+	 * Returns the input {@code Transformation}.
 	 */
-	public StreamTransformation<T> getInput() {
+	public Transformation<T> getInput() {
 		return input;
 	}
 
 	/**
-	 * Returns the {@code OutputSelector}
+	 * Returns the {@code OutputSelector}.
 	 */
 	public OutputSelector<T> getOutputSelector() {
 		return outputSelector;
 	}
 
 	@Override
-	public Collection<StreamTransformation<?>> getTransitivePredecessors() {
-		List<StreamTransformation<?>> result = Lists.newArrayList();
+	public Collection<Transformation<?>> getTransitivePredecessors() {
+		List<Transformation<?>> result = Lists.newArrayList();
 		result.add(this);
 		result.addAll(input.getTransitivePredecessors());
 		return result;
 	}
-
-	@Override
-	public final void setChainingStrategy(ChainingStrategy strategy) {
-		throw new UnsupportedOperationException("Cannot set chaining strategy on Split Transformation.");
-	}
 }
-

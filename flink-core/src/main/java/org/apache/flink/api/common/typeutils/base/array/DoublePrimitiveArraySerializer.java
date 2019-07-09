@@ -20,6 +20,9 @@ package org.apache.flink.api.common.typeutils.base.array;
 
 import java.io.IOException;
 
+import org.apache.flink.annotation.Internal;
+import org.apache.flink.api.common.typeutils.SimpleTypeSerializerSnapshot;
+import org.apache.flink.api.common.typeutils.TypeSerializerSnapshot;
 import org.apache.flink.api.common.typeutils.base.TypeSerializerSingleton;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
@@ -27,6 +30,7 @@ import org.apache.flink.core.memory.DataOutputView;
 /**
  * A serializer for double arrays.
  */
+@Internal
 public final class DoublePrimitiveArraySerializer extends TypeSerializerSingleton<double[]>{
 
 	private static final long serialVersionUID = 1L;
@@ -34,8 +38,7 @@ public final class DoublePrimitiveArraySerializer extends TypeSerializerSingleto
 	private static final double[] EMPTY = new double[0];
 
 	public static final DoublePrimitiveArraySerializer INSTANCE = new DoublePrimitiveArraySerializer();
-	
-	
+
 	@Override
 	public boolean isImmutableType() {
 		return false;
@@ -102,7 +105,20 @@ public final class DoublePrimitiveArraySerializer extends TypeSerializerSingleto
 	}
 
 	@Override
-	public boolean canEqual(Object obj) {
-		return obj instanceof DoublePrimitiveArraySerializer;
+	public TypeSerializerSnapshot<double[]> snapshotConfiguration() {
+		return new DoublePrimitiveArraySerializerSnapshot();
+	}
+
+	// ------------------------------------------------------------------------
+
+	/**
+	 * Serializer configuration snapshot for compatibility and format evolution.
+	 */
+	@SuppressWarnings("WeakerAccess")
+	public static final class DoublePrimitiveArraySerializerSnapshot extends SimpleTypeSerializerSnapshot<double[]> {
+
+		public DoublePrimitiveArraySerializerSnapshot() {
+			super(() -> INSTANCE);
+		}
 	}
 }

@@ -20,18 +20,20 @@ package org.apache.flink.api.common.typeutils.base;
 
 import java.io.IOException;
 
+import org.apache.flink.annotation.Internal;
+import org.apache.flink.api.common.typeutils.SimpleTypeSerializerSnapshot;
+import org.apache.flink.api.common.typeutils.TypeSerializerSnapshot;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
 import org.apache.flink.types.LongValue;
 
-
+@Internal
 public final class LongValueSerializer extends TypeSerializerSingleton<LongValue> {
 
 	private static final long serialVersionUID = 1L;
 	
 	public static final LongValueSerializer INSTANCE = new LongValueSerializer();
-	
-	
+
 	@Override
 	public boolean isImmutableType() {
 		return false;
@@ -80,7 +82,20 @@ public final class LongValueSerializer extends TypeSerializerSingleton<LongValue
 	}
 
 	@Override
-	public boolean canEqual(Object obj) {
-		return obj instanceof LongValueSerializer;
+	public TypeSerializerSnapshot<LongValue> snapshotConfiguration() {
+		return new LongValueSerializerSnapshot();
+	}
+
+	// ------------------------------------------------------------------------
+
+	/**
+	 * Serializer configuration snapshot for compatibility and format evolution.
+	 */
+	@SuppressWarnings("WeakerAccess")
+	public static final class LongValueSerializerSnapshot extends SimpleTypeSerializerSnapshot<LongValue> {
+
+		public LongValueSerializerSnapshot() {
+			super(() -> INSTANCE);
+		}
 	}
 }

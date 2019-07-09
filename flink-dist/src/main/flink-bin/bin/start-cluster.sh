@@ -17,15 +17,6 @@
 # limitations under the License.
 ################################################################################
 
-# Start a Flink cluster in batch or streaming mode
-USAGE="Usage: start-cluster.sh [batch|streaming]"
-
-STREAMING_MODE=$1
-
-if [[ -z $STREAMING_MODE ]]; then
-    STREAMING_MODE="batch"
-fi
-
 bin=`dirname "$0"`
 bin=`cd "$bin"; pwd`
 
@@ -33,29 +24,30 @@ bin=`cd "$bin"; pwd`
 
 # Start the JobManager instance(s)
 shopt -s nocasematch
-if [[ $RECOVERY_MODE == "zookeeper" ]]; then
+if [[ $HIGH_AVAILABILITY == "zookeeper" ]]; then
     # HA Mode
     readMasters
 
-    echo "Starting HA cluster (${STREAMING_MODE} mode) with ${#MASTERS[@]} masters and ${#ZK_QUORUM[@]} peers in ZooKeeper quorum."
+    echo "Starting HA cluster with ${#MASTERS[@]} masters."
 
     for ((i=0;i<${#MASTERS[@]};++i)); do
         master=${MASTERS[i]}
         webuiport=${WEBUIPORTS[i]}
-        ssh -n $FLINK_SSH_OPTS $master -- "nohup /bin/bash -l \"${FLINK_BIN_DIR}/jobmanager.sh\" start cluster ${STREAMING_MODE} ${master} ${webuiport} &"
+
+        if [ ${MASTERS_ALL_LOCALHOST} = true ] ; then
+            "${FLINK_BIN_DIR}"/jobmanager.sh start "${master}" "${webuiport}"
+        else
+            ssh -n $FLINK_SSH_OPTS $master -- "nohup /bin/bash -l \"${FLINK_BIN_DIR}/jobmanager.sh\" start ${master} ${webuiport} &"
+        fi
     done
 
 else
-    echo "Starting cluster (${STREAMING_MODE} mode)."
+    echo "Starting cluster."
 
     # Start single JobManager on this machine
-    "$FLINK_BIN_DIR"/jobmanager.sh start cluster ${STREAMING_MODE}
+    "$FLINK_BIN_DIR"/jobmanager.sh start
 fi
 shopt -u nocasematch
 
 # Start TaskManager instance(s)
-readSlaves
-
-for slave in ${SLAVES[@]}; do
-    ssh -n $FLINK_SSH_OPTS $slave -- "nohup /bin/bash -l \"${FLINK_BIN_DIR}/taskmanager.sh\" start ${STREAMING_MODE} &"
-done
+TMSlaves start

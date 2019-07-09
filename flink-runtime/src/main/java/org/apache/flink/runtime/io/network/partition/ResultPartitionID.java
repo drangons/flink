@@ -18,32 +18,38 @@
 
 package org.apache.flink.runtime.io.network.partition;
 
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.runtime.executiongraph.ExecutionAttemptID;
 import org.apache.flink.runtime.executiongraph.IntermediateResultPartition;
 import org.apache.flink.runtime.jobgraph.IntermediateResultPartitionID;
 
 import java.io.Serializable;
 
+import static org.apache.flink.util.Preconditions.checkNotNull;
+
 /**
  * Runtime identifier of a produced {@link IntermediateResultPartition}.
  *
- * <p> In failure cases the {@link IntermediateResultPartitionID} is not enough to uniquely
+ * <p>In failure cases the {@link IntermediateResultPartitionID} is not enough to uniquely
  * identify a result partition. It needs to be associated with the producing task as well to ensure
  * correct tracking of failed/restarted tasks.
  */
 public final class ResultPartitionID implements Serializable {
 
+	private static final long serialVersionUID = -902516386203787826L;
+
 	private final IntermediateResultPartitionID partitionId;
 
 	private final ExecutionAttemptID producerId;
 
+	@VisibleForTesting
 	public ResultPartitionID() {
 		this(new IntermediateResultPartitionID(), new ExecutionAttemptID());
 	}
 
 	public ResultPartitionID(IntermediateResultPartitionID partitionId, ExecutionAttemptID producerId) {
-		this.partitionId = partitionId;
-		this.producerId = producerId;
+		this.partitionId = checkNotNull(partitionId);
+		this.producerId = checkNotNull(producerId);
 	}
 
 	public IntermediateResultPartitionID getPartitionId() {
@@ -72,6 +78,6 @@ public final class ResultPartitionID implements Serializable {
 
 	@Override
 	public String toString() {
-		return partitionId.toShortString() + "@" + producerId.toShortString();
+		return partitionId.toString() + "@" + producerId.toString();
 	}
 }

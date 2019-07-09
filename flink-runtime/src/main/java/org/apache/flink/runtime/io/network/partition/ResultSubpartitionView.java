@@ -19,7 +19,9 @@
 package org.apache.flink.runtime.io.network.partition;
 
 import org.apache.flink.runtime.io.network.buffer.Buffer;
-import org.apache.flink.runtime.util.event.NotificationListener;
+import org.apache.flink.runtime.io.network.partition.ResultSubpartition.BufferAndBacklog;
+
+import javax.annotation.Nullable;
 
 import java.io.IOException;
 
@@ -30,24 +32,19 @@ public interface ResultSubpartitionView {
 
 	/**
 	 * Returns the next {@link Buffer} instance of this queue iterator.
-	 * <p>
-	 * If there is currently no instance available, it will return <code>null</code>.
+	 *
+	 * <p>If there is currently no instance available, it will return <code>null</code>.
 	 * This might happen for example when a pipelined queue producer is slower
 	 * than the consumer or a spilled queue needs to read in more data.
-	 * <p>
-	 * <strong>Important</strong>: The consumer has to make sure that each
-	 * buffer instance will eventually be recycled with {@link Buffer#recycle()}
+	 *
+	 * <p><strong>Important</strong>: The consumer has to make sure that each
+	 * buffer instance will eventually be recycled with {@link Buffer#recycleBuffer()}
 	 * after it has been consumed.
 	 */
-	Buffer getNextBuffer() throws IOException, InterruptedException;
+	@Nullable
+	BufferAndBacklog getNextBuffer() throws IOException, InterruptedException;
 
-	/**
-	 * Subscribes to data availability notifications.
-	 * <p>
-	 * Returns whether the subscription was successful. A subscription fails,
-	 * if there is data available.
-	 */
-	boolean registerListener(NotificationListener listener) throws IOException;
+	void notifyDataAvailable();
 
 	void releaseAllResources() throws IOException;
 
@@ -57,4 +54,10 @@ public interface ResultSubpartitionView {
 
 	Throwable getFailureCause();
 
+	/**
+	 * Returns whether the next buffer is an event or not.
+	 */
+	boolean nextBufferIsEvent();
+
+	boolean isAvailable();
 }

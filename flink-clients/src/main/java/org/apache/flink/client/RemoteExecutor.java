@@ -18,34 +18,33 @@
 
 package org.apache.flink.client;
 
+import org.apache.flink.api.common.JobExecutionResult;
+import org.apache.flink.api.common.Plan;
+import org.apache.flink.api.common.PlanExecutor;
+import org.apache.flink.client.program.ClusterClient;
+import org.apache.flink.client.program.JobWithJars;
+import org.apache.flink.client.program.rest.RestClusterClient;
+import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.JobManagerOptions;
+import org.apache.flink.configuration.RestOptions;
+import org.apache.flink.optimizer.DataStatistics;
+import org.apache.flink.optimizer.Optimizer;
+import org.apache.flink.optimizer.costs.DefaultCostEstimator;
+import org.apache.flink.optimizer.plan.OptimizedPlan;
+import org.apache.flink.optimizer.plandump.PlanJSONDumpGenerator;
+
 import java.net.InetSocketAddress;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.net.URL;
 import java.util.Collections;
 import java.util.List;
 
-import org.apache.flink.api.common.JobExecutionResult;
-import org.apache.flink.api.common.JobID;
-import org.apache.flink.api.common.Plan;
-import org.apache.flink.api.common.PlanExecutor;
-import org.apache.flink.client.program.Client;
-import org.apache.flink.client.program.JobWithJars;
-import org.apache.flink.optimizer.DataStatistics;
-import org.apache.flink.optimizer.Optimizer;
-import org.apache.flink.configuration.ConfigConstants;
-import org.apache.flink.optimizer.costs.DefaultCostEstimator;
-import org.apache.flink.optimizer.plan.OptimizedPlan;
-import org.apache.flink.optimizer.plandump.PlanJSONDumpGenerator;
-import org.apache.flink.configuration.Configuration;
-
 /**
  * The RemoteExecutor is a {@link org.apache.flink.api.common.PlanExecutor} that takes the program
  * and ships it to a remote Flink cluster for execution.
- * 
+ *
  * <p>The RemoteExecutor is pointed at the JobManager and gets the program and (if necessary) the
  * set of libraries that need to be shipped together with the program.</p>
- * 
+ *
  * <p>The RemoteExecutor is used in the {@link org.apache.flink.api.java.RemoteEnvironment} to
  * remotely execute program parts.</p>
  */
@@ -59,10 +58,9 @@ public class RemoteExecutor extends PlanExecutor {
 
 	private final Configuration clientConfiguration;
 
-	private Client client;
+	private ClusterClient<?> client;
 
 	private int defaultParallelism = 1;
-
 
 	public RemoteExecutor(String hostname, int port) {
 		this(hostname, port, new Configuration(), Collections.<URL>emptyList(),
@@ -75,7 +73,7 @@ public class RemoteExecutor extends PlanExecutor {
 	}
 
 	public RemoteExecutor(String hostport, URL jarFile) {
-		this(getInetFromHostport(hostport), new Configuration(), Collections.singletonList(jarFile),
+		this(ClientUtils.parseHostPortAddress(hostport), new Configuration(), Collections.singletonList(jarFile),
 				Collections.<URL>emptyList());
 	}
 
@@ -95,7 +93,7 @@ public class RemoteExecutor extends PlanExecutor {
 	}
 
 	public RemoteExecutor(String hostport, Configuration clientConfiguration, URL jarFile) {
-		this(getInetFromHostport(hostport), clientConfiguration,
+		this(ClientUtils.parseHostPortAddress(hostport), clientConfiguration,
 				Collections.singletonList(jarFile), Collections.<URL>emptyList());
 	}
 
@@ -110,9 +108,9 @@ public class RemoteExecutor extends PlanExecutor {
 		this.jarFiles = jarFiles;
 		this.globalClasspaths = globalClasspaths;
 
-
-		clientConfiguration.setString(ConfigConstants.JOB_MANAGER_IPC_ADDRESS_KEY, inet.getHostName());
-		clientConfiguration.setInteger(ConfigConstants.JOB_MANAGER_IPC_PORT_KEY, inet.getPort());
+		clientConfiguration.setString(JobManagerOptions.ADDRESS, inet.getHostName());
+		clientConfiguration.setInteger(JobManagerOptions.PORT, inet.getPort());
+		clientConfiguration.setInteger(RestOptions.PORT, inet.getPort());
 	}
 
 	// ------------------------------------------------------------------------
@@ -135,7 +133,7 @@ public class RemoteExecutor extends PlanExecutor {
 	/**
 	 * Gets the parallelism that will be used when neither the program does not define
 	 * any parallelism at all.
-	 * 
+	 *
 	 * @return The default parallelism for the executor.
 	 */
 	public int getDefaultParallelism() {
@@ -146,12 +144,11 @@ public class RemoteExecutor extends PlanExecutor {
 	//  Startup & Shutdown
 	// ------------------------------------------------------------------------
 
-
 	@Override
 	public void start() throws Exception {
 		synchronized (lock) {
 			if (client == null) {
-				client = new Client(clientConfiguration);
+				client = new RestClusterClient<>(clientConfiguration, "RemoteExecutor");
 				client.setPrintStatusDuringExecution(isPrintingStatusDuringExecution());
 			}
 			else {
@@ -209,7 +206,7 @@ public class RemoteExecutor extends PlanExecutor {
 			}
 
 			try {
-				return client.runBlocking(program, defaultParallelism);
+				return client.run(program, defaultParallelism).getJobExecutionResult();
 			}
 			finally {
 				if (shutDownAtEnd) {
@@ -226,61 +223,4 @@ public class RemoteExecutor extends PlanExecutor {
 		return new PlanJSONDumpGenerator().getOptimizerPlanAsJSON(optPlan);
 	}
 
-	@Override
-	public void endSession(JobID jobID) throws Exception {
-		if (jobID == null) {
-			throw new NullPointerException("The supplied jobID must not be null.");
-		}
-
-		synchronized (this.lock) {
-			// check if we start a session dedicated for this execution
-			final boolean shutDownAtEnd;
-
-			if (client == null) {
-				shutDownAtEnd = true;
-				// start the executor for us
-				start();
-			}
-			else {
-				// we use the existing session
-				shutDownAtEnd = false;
-			}
-
-			try {
-				client.endSession(jobID);
-			}
-			finally {
-				if (shutDownAtEnd) {
-					stop();
-				}
-			}
-		}
-	}
-
-	// --------------------------------------------------------------------------------------------
-	//   Utilities
-	// --------------------------------------------------------------------------------------------
-
-	/**
-	 * Utility method that converts a string of the form "host:port" into an {@link InetSocketAddress}.
-	 * The returned InetSocketAddress may be unresolved!
-	 * 
-	 * @param hostport The "host:port" string.
-	 * @return The converted InetSocketAddress.
-	 */
-	private static InetSocketAddress getInetFromHostport(String hostport) {
-		// from http://stackoverflow.com/questions/2345063/java-common-way-to-validate-and-convert-hostport-to-inetsocketaddress
-		URI uri;
-		try {
-			uri = new URI("my://" + hostport);
-		} catch (URISyntaxException e) {
-			throw new RuntimeException("Could not identify hostname and port in '" + hostport + "'.", e);
-		}
-		String host = uri.getHost();
-		int port = uri.getPort();
-		if (host == null || port == -1) {
-			throw new RuntimeException("Could not identify hostname and port in '" + hostport + "'.");
-		}
-		return new InetSocketAddress(host, port);
-	}
 }

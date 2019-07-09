@@ -18,21 +18,21 @@
 
 package org.apache.flink.streaming.api.operators;
 
-import java.io.Serializable;
-
+import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.functions.Function;
 import org.apache.flink.api.common.functions.util.FunctionUtils;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.runtime.state.StateHandle;
-import org.apache.flink.streaming.api.checkpoint.CheckpointNotifier;
-import org.apache.flink.streaming.api.checkpoint.Checkpointed;
+import org.apache.flink.runtime.state.CheckpointListener;
+import org.apache.flink.runtime.state.StateInitializationContext;
+import org.apache.flink.runtime.state.StateSnapshotContext;
+import org.apache.flink.streaming.api.checkpoint.CheckpointedFunction;
+import org.apache.flink.streaming.api.checkpoint.ListCheckpointed;
 import org.apache.flink.streaming.api.graph.StreamConfig;
-import org.apache.flink.runtime.state.StateBackend;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.tasks.StreamTask;
-import org.apache.flink.streaming.runtime.tasks.StreamTaskState;
+import org.apache.flink.streaming.util.functions.StreamingFunctionUtils;
 
 import static java.util.Objects.requireNonNull;
 
@@ -40,26 +40,29 @@ import static java.util.Objects.requireNonNull;
  * This is used as the base class for operators that have a user-defined
  * function. This class handles the opening and closing of the user-defined functions,
  * as part of the operator life cycle.
- * 
+ *
  * @param <OUT>
  *            The output type of the operator
  * @param <F>
  *            The type of the user function
  */
-public abstract class AbstractUdfStreamOperator<OUT, F extends Function> extends AbstractStreamOperator<OUT> implements OutputTypeConfigurable<OUT> {
+@PublicEvolving
+public abstract class AbstractUdfStreamOperator<OUT, F extends Function>
+		extends AbstractStreamOperator<OUT>
+		implements OutputTypeConfigurable<OUT> {
 
 	private static final long serialVersionUID = 1L;
-	
-	
-	/** the user function */
+
+
+	/** The user function. */
 	protected final F userFunction;
-	
-	/** Flag to prevent duplicate function.close() calls in close() and dispose() */
+
+	/** Flag to prevent duplicate function.close() calls in close() and dispose(). */
 	private transient boolean functionsClosed = false;
-	
-	
+
 	public AbstractUdfStreamOperator(F userFunction) {
 		this.userFunction = requireNonNull(userFunction);
+		checkUdfCheckpointingPreconditions();
 	}
 
 	/**
@@ -69,23 +72,33 @@ public abstract class AbstractUdfStreamOperator<OUT, F extends Function> extends
 	public F getUserFunction() {
 		return userFunction;
 	}
-	
+
 	// ------------------------------------------------------------------------
 	//  operator life cycle
 	// ------------------------------------------------------------------------
 
-
 	@Override
 	public void setup(StreamTask<?, ?> containingTask, StreamConfig config, Output<StreamRecord<OUT>> output) {
 		super.setup(containingTask, config, output);
-		
 		FunctionUtils.setFunctionRuntimeContext(userFunction, getRuntimeContext());
+
+	}
+
+	@Override
+	public void snapshotState(StateSnapshotContext context) throws Exception {
+		super.snapshotState(context);
+		StreamingFunctionUtils.snapshotFunctionState(context, getOperatorStateBackend(), userFunction);
+	}
+
+	@Override
+	public void initializeState(StateInitializationContext context) throws Exception {
+		super.initializeState(context);
+		StreamingFunctionUtils.restoreFunctionState(context, userFunction);
 	}
 
 	@Override
 	public void open() throws Exception {
 		super.open();
-		
 		FunctionUtils.openFunction(userFunction, new Configuration());
 	}
 
@@ -97,83 +110,24 @@ public abstract class AbstractUdfStreamOperator<OUT, F extends Function> extends
 	}
 
 	@Override
-	public void dispose() {
+	public void dispose() throws Exception {
+		super.dispose();
 		if (!functionsClosed) {
 			functionsClosed = true;
-			try {
-				FunctionUtils.closeFunction(userFunction);
-			}
-			catch (Throwable t) {
-				LOG.error("Exception while closing user function while failing or canceling task", t);
-			}
+			FunctionUtils.closeFunction(userFunction);
 		}
 	}
 
 	// ------------------------------------------------------------------------
 	//  checkpointing and recovery
 	// ------------------------------------------------------------------------
-	
-	@Override
-	public StreamTaskState snapshotOperatorState(long checkpointId, long timestamp) throws Exception {
-		StreamTaskState state = super.snapshotOperatorState(checkpointId, timestamp);
-
-		if (userFunction instanceof Checkpointed) {
-			@SuppressWarnings("unchecked")
-			Checkpointed<Serializable> chkFunction = (Checkpointed<Serializable>) userFunction;
-			
-			Serializable udfState;
-			try {
-				udfState = chkFunction.snapshotState(checkpointId, timestamp);
-			} 
-			catch (Exception e) {
-				throw new Exception("Failed to draw state snapshot from function: " + e.getMessage(), e);
-			}
-			
-			if (udfState != null) {
-				try {
-					StateBackend<?> stateBackend = getStateBackend();
-					StateHandle<Serializable> handle = 
-							stateBackend.checkpointStateSerializable(udfState, checkpointId, timestamp);
-					state.setFunctionState(handle);
-				}
-				catch (Exception e) {
-					throw new Exception("Failed to add the state snapshot of the function to the checkpoint: "
-							+ e.getMessage(), e);
-				}
-			}
-		}
-		
-		return state;
-	}
 
 	@Override
-	public void restoreState(StreamTaskState state) throws Exception {
-		super.restoreState(state);
-		
-		StateHandle<Serializable> stateHandle =  state.getFunctionState();
-		
-		if (userFunction instanceof Checkpointed && stateHandle != null) {
-			@SuppressWarnings("unchecked")
-			Checkpointed<Serializable> chkFunction = (Checkpointed<Serializable>) userFunction;
-			
-			Serializable functionState = stateHandle.getState(getUserCodeClassloader());
-			if (functionState != null) {
-				try {
-					chkFunction.restoreState(functionState);
-				}
-				catch (Exception e) {
-					throw new Exception("Failed to restore state to function: " + e.getMessage(), e);
-				}
-			}
-		}
-	}
+	public void notifyCheckpointComplete(long checkpointId) throws Exception {
+		super.notifyCheckpointComplete(checkpointId);
 
-	@Override
-	public void notifyOfCompletedCheckpoint(long checkpointId) throws Exception {
-		super.notifyOfCompletedCheckpoint(checkpointId);
-
-		if (userFunction instanceof CheckpointNotifier) {
-			((CheckpointNotifier) userFunction).notifyCheckpointComplete(checkpointId);
+		if (userFunction instanceof CheckpointListener) {
+			((CheckpointListener) userFunction).notifyCheckpointComplete(checkpointId);
 		}
 	}
 
@@ -183,11 +137,7 @@ public abstract class AbstractUdfStreamOperator<OUT, F extends Function> extends
 
 	@Override
 	public void setOutputType(TypeInformation<OUT> outTypeInfo, ExecutionConfig executionConfig) {
-		if (userFunction instanceof OutputTypeConfigurable) {
-			OutputTypeConfigurable<OUT> outputTypeConfigurable = (OutputTypeConfigurable<OUT>) userFunction;
-
-			outputTypeConfigurable.setOutputType(outTypeInfo, executionConfig);
-		}
+		StreamingFunctionUtils.setOutputType(userFunction, outTypeInfo, executionConfig);
 	}
 
 
@@ -196,13 +146,22 @@ public abstract class AbstractUdfStreamOperator<OUT, F extends Function> extends
 	// ------------------------------------------------------------------------
 
 	/**
-	 * 
 	 * Since the streaming API does not implement any parametrization of functions via a
 	 * configuration, the config returned here is actually empty.
-	 * 
+	 *
 	 * @return The user function parameters (currently empty)
 	 */
 	public Configuration getUserFunctionParameters() {
 		return new Configuration();
+	}
+
+	private void checkUdfCheckpointingPreconditions() {
+
+		if (userFunction instanceof CheckpointedFunction
+			&& userFunction instanceof ListCheckpointed) {
+
+			throw new IllegalStateException("User functions are not allowed to implement " +
+				"CheckpointedFunction AND ListCheckpointed.");
+		}
 	}
 }

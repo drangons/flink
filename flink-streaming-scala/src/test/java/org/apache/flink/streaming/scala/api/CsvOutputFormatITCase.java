@@ -17,51 +17,95 @@
 
 package org.apache.flink.streaming.scala.api;
 
-import org.apache.flink.api.common.functions.FlatMapFunction;
-import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.streaming.api.scala.OutputFormatTestPrograms;
-import org.apache.flink.streaming.util.StreamingProgramTestBase;
 import org.apache.flink.test.testdata.WordCountData;
-import org.apache.flink.util.Collector;
+import org.apache.flink.test.util.AbstractTestBase;
 
-public class CsvOutputFormatITCase extends StreamingProgramTestBase {
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Test;
+
+import java.io.File;
+
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
+/**
+ * IT cases for the {@link org.apache.flink.api.java.io.CsvOutputFormat}.
+ */
+public class CsvOutputFormatITCase extends AbstractTestBase {
 
 	protected String resultPath;
 
-	@Override
-	protected void preSubmit() throws Exception {
-		resultPath = getTempDirPath("result");
+	@Before
+	public void createFile() throws Exception {
+		File resultFile = createAndRegisterTempFile("result");
+		resultPath = resultFile.toURI().toString();
 	}
 
-	@Override
-	protected void testProgram() throws Exception {
+	@Test
+	public void testPath() throws Exception {
 		OutputFormatTestPrograms.wordCountToCsv(WordCountData.TEXT, resultPath);
 	}
 
-	@Override
-	protected void postSubmit() throws Exception {
-		//Strip the parentheses from the expected text like output
-		compareResultsByLinesInMemory(WordCountData.STREAMING_COUNTS_AS_TUPLES
-				.replaceAll("[\\\\(\\\\)]", ""), resultPath);
+	@Test
+	public void testPathMillis() throws Exception {
+		OutputFormatTestPrograms.wordCountToCsv(WordCountData.TEXT, resultPath);
 	}
 
-	public static final class Tokenizer implements FlatMapFunction<String, Tuple2<String, Integer>> {
-		private static final long serialVersionUID = 1L;
+	@Test
+	public void testPathWriteMode() throws Exception {
+		OutputFormatTestPrograms.wordCountToCsv(WordCountData.TEXT, resultPath, FileSystem.WriteMode.NO_OVERWRITE);
+	}
 
-		@Override
-		public void flatMap(String value, Collector<Tuple2<String, Integer>> out)
-				throws Exception {
-			// normalize and split the line
-			String[] tokens = value.toLowerCase().split("\\W+");
+	@Test
+	public void testPathWriteModeMillis() throws Exception {
+		OutputFormatTestPrograms.wordCountToCsv(WordCountData.TEXT, resultPath, FileSystem.WriteMode.NO_OVERWRITE);
+	}
 
-			// emit the pairs
-			for (String token : tokens) {
-				if (token.length() > 0) {
-					out.collect(new Tuple2<String, Integer>(token, 1));
-				}
-			}
+	@Test
+	public void testPathWriteModeMillisDelimiter() throws Exception {
+		OutputFormatTestPrograms.wordCountToCsv(WordCountData.TEXT, resultPath, FileSystem.WriteMode.NO_OVERWRITE, "\n", ",");
+	}
+
+	@Test
+	public void failPathWriteMode() throws Exception {
+		OutputFormatTestPrograms.wordCountToCsv(WordCountData.TEXT, resultPath);
+		try {
+			OutputFormatTestPrograms.wordCountToCsv(WordCountData.TEXT, resultPath, FileSystem.WriteMode.NO_OVERWRITE);
+			fail("File should exist.");
+		} catch (Exception e) {
+			assertTrue(e.getCause().getMessage().contains("File already exists"));
 		}
 	}
 
+	@Test
+	public void failPathWriteModeMillis() throws Exception {
+		OutputFormatTestPrograms.wordCountToCsv(WordCountData.TEXT, resultPath);
+		try {
+			OutputFormatTestPrograms.wordCountToCsv(WordCountData.TEXT, resultPath, FileSystem.WriteMode.NO_OVERWRITE);
+			fail("File should exist");
+		} catch (Exception e) {
+			assertTrue(e.getCause().getMessage().contains("File already exists"));
+		}
+	}
+
+	@Test
+	public void failPathWriteModeMillisDelimiter() throws Exception {
+		OutputFormatTestPrograms.wordCountToCsv(WordCountData.TEXT, resultPath);
+		try {
+			OutputFormatTestPrograms.wordCountToCsv(WordCountData.TEXT, resultPath, FileSystem.WriteMode.NO_OVERWRITE, "\n", ",");
+			fail("File should exist.");
+		} catch (Exception e) {
+			assertTrue(e.getCause().getMessage().contains("File already exists"));
+		}
+	}
+
+	@After
+	public void closeFile() throws Exception {
+		compareResultsByLinesInMemory(WordCountData.STREAMING_COUNTS_AS_TUPLES
+				.replaceAll("[\\\\(\\\\)]", ""), resultPath);
+	}
 }
 

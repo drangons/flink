@@ -17,6 +17,7 @@
 
 package org.apache.flink.streaming.api.datastream;
 
+import org.apache.flink.annotation.Public;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.operators.StreamSource;
@@ -24,17 +25,18 @@ import org.apache.flink.streaming.api.transformations.SourceTransformation;
 
 /**
  * The DataStreamSource represents the starting point of a DataStream.
- * 
+ *
  * @param <T> Type of the elements in the DataStream created from the this source.
  */
-public class DataStreamSource<T> extends SingleOutputStreamOperator<T, DataStreamSource<T>> {
+@Public
+public class DataStreamSource<T> extends SingleOutputStreamOperator<T> {
 
 	boolean isParallel;
 
 	public DataStreamSource(StreamExecutionEnvironment environment,
-			TypeInformation<T> outTypeInfo, StreamSource<T> operator,
+			TypeInformation<T> outTypeInfo, StreamSource<T, ?> operator,
 			boolean isParallel, String sourceName) {
-		super(environment, new SourceTransformation<T>(sourceName, operator, outTypeInfo, environment.getParallelism()));
+		super(environment, new SourceTransformation<>(sourceName, operator, outTypeInfo, environment.getParallelism()));
 
 		this.isParallel = isParallel;
 		if (!isParallel) {
@@ -42,12 +44,18 @@ public class DataStreamSource<T> extends SingleOutputStreamOperator<T, DataStrea
 		}
 	}
 
+	public DataStreamSource(SingleOutputStreamOperator<T> operator) {
+		super(operator.environment, operator.getTransformation());
+		this.isParallel = true;
+	}
+
 	@Override
 	public DataStreamSource<T> setParallelism(int parallelism) {
-		if (parallelism > 1 && !isParallel) {
+		if (parallelism != 1 && !isParallel) {
 			throw new IllegalArgumentException("Source: " + transformation.getId() + " is not a parallel source");
 		} else {
-			return (DataStreamSource<T>) super.setParallelism(parallelism);
+			super.setParallelism(parallelism);
+			return this;
 		}
 	}
 }

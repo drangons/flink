@@ -18,11 +18,12 @@
 
 package org.apache.flink.runtime.io.network.partition.consumer;
 
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.runtime.event.AbstractEvent;
 import org.apache.flink.runtime.io.network.buffer.Buffer;
 
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static org.apache.flink.util.Preconditions.checkArgument;
+import static org.apache.flink.util.Preconditions.checkNotNull;
 
 /**
  * Either type for {@link Buffer} or {@link AbstractEvent} instances tagged with the channel index,
@@ -34,18 +35,41 @@ public class BufferOrEvent {
 
 	private final AbstractEvent event;
 
+	/**
+	 * Indicate availability of further instances for the union input gate.
+	 * This is not needed outside of the input gate unioning logic and cannot
+	 * be set outside of the consumer package.
+	 */
+	private boolean moreAvailable;
+
 	private int channelIndex;
 
-	public BufferOrEvent(Buffer buffer, int channelIndex) {
+	private final int size;
+
+	public BufferOrEvent(Buffer buffer, int channelIndex, boolean moreAvailable) {
 		this.buffer = checkNotNull(buffer);
 		this.event = null;
 		this.channelIndex = channelIndex;
+		this.moreAvailable = moreAvailable;
+		this.size = buffer.getSize();
 	}
 
-	public BufferOrEvent(AbstractEvent event, int channelIndex) {
+	public BufferOrEvent(AbstractEvent event, int channelIndex, boolean moreAvailable, int size) {
 		this.buffer = null;
 		this.event = checkNotNull(event);
 		this.channelIndex = channelIndex;
+		this.moreAvailable = moreAvailable;
+		this.size = size;
+	}
+
+	@VisibleForTesting
+	public BufferOrEvent(Buffer buffer, int channelIndex) {
+		this(buffer, channelIndex, true);
+	}
+
+	@VisibleForTesting
+	public BufferOrEvent(AbstractEvent event, int channelIndex) {
+		this(event, channelIndex, true, 0);
 	}
 
 	public boolean isBuffer() {
@@ -73,9 +97,21 @@ public class BufferOrEvent {
 		this.channelIndex = channelIndex;
 	}
 
+	boolean moreAvailable() {
+		return moreAvailable;
+	}
+
 	@Override
 	public String toString() {
-		return String.format("BufferOrEvent [%s, channelIndex = %d]",
-				isBuffer() ? buffer : event, channelIndex);
+		return String.format("BufferOrEvent [%s, channelIndex = %d, size = %d]",
+				isBuffer() ? buffer : event, channelIndex, size);
+	}
+
+	public void setMoreAvailable(boolean moreAvailable) {
+		this.moreAvailable = moreAvailable;
+	}
+
+	public int getSize() {
+		return size;
 	}
 }

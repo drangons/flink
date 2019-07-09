@@ -18,13 +18,13 @@
 
 package org.apache.flink.api.scala.operators;
 
-import java.util.ArrayList;
-import java.util.List;
-
+import org.apache.flink.annotation.Internal;
+import org.apache.flink.annotation.Public;
 import org.apache.flink.api.common.InvalidProgramException;
+import org.apache.flink.api.common.functions.GroupCombineFunction;
 import org.apache.flink.api.common.functions.GroupReduceFunction;
 import org.apache.flink.api.common.functions.RichGroupReduceFunction;
-import org.apache.flink.api.common.functions.RichGroupReduceFunction.Combinable;
+import org.apache.flink.api.common.operators.Keys;
 import org.apache.flink.api.common.operators.Operator;
 import org.apache.flink.api.common.operators.SingleInputSemanticProperties;
 import org.apache.flink.api.common.operators.UnaryOperatorInformation;
@@ -34,14 +34,16 @@ import org.apache.flink.api.java.aggregation.AggregationFunction;
 import org.apache.flink.api.java.aggregation.AggregationFunctionFactory;
 import org.apache.flink.api.java.aggregation.Aggregations;
 import org.apache.flink.api.java.operators.Grouping;
-import org.apache.flink.api.java.operators.Keys;
 import org.apache.flink.api.java.operators.SingleInputOperator;
 import org.apache.flink.api.java.typeutils.TupleTypeInfoBase;
 import org.apache.flink.api.java.typeutils.runtime.TupleSerializerBase;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.util.Collector;
+import org.apache.flink.util.Preconditions;
 
-import com.google.common.base.Preconditions;
+import java.util.ArrayList;
+import java.util.List;
+
 import scala.Product;
 
 /**
@@ -50,17 +52,17 @@ import scala.Product;
  *
  * @param <IN> The type of the data set aggregated by the operator.
  */
+@Public
 public class ScalaAggregateOperator<IN> extends SingleInputOperator<IN, IN, ScalaAggregateOperator<IN>> {
 
-	private final List<AggregationFunction<?>> aggregationFunctions = new ArrayList<AggregationFunction<?>>(4);
+	private final List<AggregationFunction<?>> aggregationFunctions = new ArrayList<>(4);
 
-	private final List<Integer> fields = new ArrayList<Integer>(4);
+	private final List<Integer> fields = new ArrayList<>(4);
 
 	private final Grouping<IN> grouping;
 
 	/**
-	 * <p>
-	 * Non grouped aggregation
+	 * Non grouped aggregation.
 	 */
 	public ScalaAggregateOperator(org.apache.flink.api.java.DataSet<IN> input, Aggregations function, int field) {
 		super(Preconditions.checkNotNull(input), input.getType());
@@ -87,23 +89,22 @@ public class ScalaAggregateOperator<IN> extends SingleInputOperator<IN, IN, Scal
 	}
 
 	/**
-	 *
-	 * Grouped aggregation
+	 * Grouped aggregation.
 	 *
 	 * @param input
 	 * @param function
 	 * @param field
 	 */
 	public ScalaAggregateOperator(Grouping<IN> input, Aggregations function, int field) {
-		super(Preconditions.checkNotNull(input).getDataSet(), input.getDataSet().getType());
+		super(Preconditions.checkNotNull(input).getInputDataSet(), input.getInputDataSet().getType());
 
 		Preconditions.checkNotNull(function);
 
-		if (!input.getDataSet().getType().isTupleType()) {
+		if (!input.getInputDataSet().getType().isTupleType()) {
 			throw new InvalidProgramException("Aggregating on field positions is only possible on tuple data types.");
 		}
 
-		TupleTypeInfoBase<?> inType = (TupleTypeInfoBase<?>) input.getDataSet().getType();
+		TupleTypeInfoBase<?> inType = (TupleTypeInfoBase<?>) input.getInputDataSet().getType();
 
 		if (field < 0 || field >= inType.getArity()) {
 			throw new IllegalArgumentException("Aggregation field position is out of range.");
@@ -118,7 +119,6 @@ public class ScalaAggregateOperator<IN> extends SingleInputOperator<IN, IN, Scal
 		this.grouping = input;
 	}
 
-
 	public ScalaAggregateOperator<IN> and(Aggregations function, int field) {
 		Preconditions.checkNotNull(function);
 
@@ -127,7 +127,6 @@ public class ScalaAggregateOperator<IN> extends SingleInputOperator<IN, IN, Scal
 		if (field < 0 || field >= inType.getArity()) {
 			throw new IllegalArgumentException("Aggregation field position is out of range.");
 		}
-
 
 		AggregationFunctionFactory factory = function.getFactory();
 		AggregationFunction<?> aggFunct = factory.createAggregationFunction(inType.getTypeAt(field).getTypeClass());
@@ -147,7 +146,6 @@ public class ScalaAggregateOperator<IN> extends SingleInputOperator<IN, IN, Scal
 			throw new IllegalStateException();
 		}
 
-
 		// construct the aggregation function
 		AggregationFunction<Object>[] aggFunctions = new AggregationFunction[this.aggregationFunctions.size()];
 		int[] fields = new int[this.fields.size()];
@@ -159,18 +157,17 @@ public class ScalaAggregateOperator<IN> extends SingleInputOperator<IN, IN, Scal
 
 			genName.append(aggFunctions[i].toString()).append('(').append(fields[i]).append(')').append(',');
 		}
-		genName.setLength(genName.length()-1);
+		genName.setLength(genName.length() - 1);
 
 		@SuppressWarnings("rawtypes")
 		RichGroupReduceFunction<IN, IN> function = new AggregatingUdf(getInputType(), aggFunctions, fields);
-
 
 		String name = getName() != null ? getName() : genName.toString();
 
 		// distinguish between grouped reduce and non-grouped reduce
 		if (this.grouping == null) {
 			// non grouped aggregation
-			UnaryOperatorInformation<IN, IN> operatorInfo = new UnaryOperatorInformation<IN, IN>(getInputType(), getResultType());
+			UnaryOperatorInformation<IN, IN> operatorInfo = new UnaryOperatorInformation<>(getInputType(), getResultType());
 			GroupReduceOperatorBase<IN, IN, GroupReduceFunction<IN, IN>> po =
 					new GroupReduceOperatorBase<IN, IN, GroupReduceFunction<IN, IN>>(function, operatorInfo, new int[0], name);
 
@@ -187,7 +184,7 @@ public class ScalaAggregateOperator<IN> extends SingleInputOperator<IN, IN, Scal
 		if (this.grouping.getKeys() instanceof Keys.ExpressionKeys) {
 			// grouped aggregation
 			int[] logicalKeyPositions = this.grouping.getKeys().computeLogicalKeyPositions();
-			UnaryOperatorInformation<IN, IN> operatorInfo = new UnaryOperatorInformation<IN, IN>(getInputType(), getResultType());
+			UnaryOperatorInformation<IN, IN> operatorInfo = new UnaryOperatorInformation<>(getInputType(), getResultType());
 			GroupReduceOperatorBase<IN, IN, GroupReduceFunction<IN, IN>> po =
 					new GroupReduceOperatorBase<IN, IN, GroupReduceFunction<IN, IN>>(function, operatorInfo, logicalKeyPositions, name);
 
@@ -230,8 +227,11 @@ public class ScalaAggregateOperator<IN> extends SingleInputOperator<IN, IN, Scal
 
 	// --------------------------------------------------------------------------------------------
 
-	@Combinable
-	public static final class AggregatingUdf<T extends Product> extends RichGroupReduceFunction<T, T> {
+	@Internal
+	private static final class AggregatingUdf<T extends Product>
+		extends RichGroupReduceFunction<T, T>
+		implements GroupCombineFunction<T, T> {
+
 		private static final long serialVersionUID = 1L;
 
 		private final int[] fieldPositions;
@@ -251,7 +251,6 @@ public class ScalaAggregateOperator<IN> extends SingleInputOperator<IN, IN, Scal
 			this.aggFunctions = aggFunctions;
 			this.fieldPositions = fieldPositions;
 		}
-
 
 		@Override
 		public void open(Configuration parameters) throws Exception {
@@ -292,6 +291,11 @@ public class ScalaAggregateOperator<IN> extends SingleInputOperator<IN, IN, Scal
 			T result = serializer.createInstance(fields);
 
 			out.collect(result);
+		}
+
+		@Override
+		public void combine(Iterable<T> records, Collector<T> out) {
+			reduce(records, out);
 		}
 
 	}

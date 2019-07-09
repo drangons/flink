@@ -16,31 +16,31 @@
  * limitations under the License.
  */
 
-
 package org.apache.flink.runtime.iterative.task;
 
-import java.io.IOException;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.concurrent.atomic.AtomicBoolean;
-
-import org.apache.flink.runtime.event.TaskEvent;
-import org.apache.flink.runtime.operators.BatchTask;
-import org.apache.flink.types.IntValue;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.apache.flink.api.common.aggregators.Aggregator;
 import org.apache.flink.api.common.aggregators.AggregatorWithName;
 import org.apache.flink.api.common.aggregators.ConvergenceCriterion;
+import org.apache.flink.runtime.event.TaskEvent;
+import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.io.network.api.reader.MutableRecordReader;
 import org.apache.flink.runtime.iterative.event.AllWorkersDoneEvent;
 import org.apache.flink.runtime.iterative.event.TerminationEvent;
 import org.apache.flink.runtime.iterative.event.WorkerDoneEvent;
 import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
+import org.apache.flink.runtime.operators.BatchTask;
 import org.apache.flink.runtime.operators.util.TaskConfig;
+import org.apache.flink.types.IntValue;
 import org.apache.flink.types.Value;
+import org.apache.flink.util.Preconditions;
 
-import com.google.common.base.Preconditions;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * The task responsible for synchronizing all iteration heads, implemented as an output task. This task
@@ -53,48 +53,68 @@ public class IterationSynchronizationSinkTask extends AbstractInvokable implemen
 	private static final Logger log = LoggerFactory.getLogger(IterationSynchronizationSinkTask.class);
 
 	private MutableRecordReader<IntValue> headEventReader;
-	
+
 	private SyncEventHandler eventHandler;
 
 	private ConvergenceCriterion<Value> convergenceCriterion;
-	
+
+	private ConvergenceCriterion<Value> implicitConvergenceCriterion;
+
 	private Map<String, Aggregator<?>> aggregators;
 
 	private String convergenceAggregatorName;
 
+	private String implicitConvergenceAggregatorName;
+
 	private int currentIteration = 1;
-	
+
 	private int maxNumberOfIterations;
 
 	private final AtomicBoolean terminated = new AtomicBoolean(false);
 
+	// --------------------------------------------------------------------------------------------
+
+	/**
+	 * Create an Invokable task and set its environment.
+	 *
+	 * @param environment The environment assigned to this invokable.
+	 */
+	public IterationSynchronizationSinkTask(Environment environment) {
+		super(environment);
+	}
 
 	// --------------------------------------------------------------------------------------------
-	
-	@Override
-	public void registerInputOutput() {
-		this.headEventReader = new MutableRecordReader<IntValue>(getEnvironment().getInputGate(0));
-	}
 
 	@Override
 	public void invoke() throws Exception {
+		this.headEventReader = new MutableRecordReader<>(
+				getEnvironment().getInputGate(0),
+				getEnvironment().getTaskManagerInfo().getTmpDirectories());
+
 		TaskConfig taskConfig = new TaskConfig(getTaskConfiguration());
-		
+
 		// store all aggregators
-		this.aggregators = new HashMap<String, Aggregator<?>>();
+		this.aggregators = new HashMap<>();
 		for (AggregatorWithName<?> aggWithName : taskConfig.getIterationAggregators(getUserCodeClassLoader())) {
 			aggregators.put(aggWithName.getName(), aggWithName.getAggregator());
 		}
-		
+
 		// store the aggregator convergence criterion
 		if (taskConfig.usesConvergenceCriterion()) {
 			convergenceCriterion = taskConfig.getConvergenceCriterion(getUserCodeClassLoader());
 			convergenceAggregatorName = taskConfig.getConvergenceCriterionAggregatorName();
 			Preconditions.checkNotNull(convergenceAggregatorName);
 		}
-		
+
+		// store the default aggregator convergence criterion
+		if (taskConfig.usesImplicitConvergenceCriterion()) {
+			implicitConvergenceCriterion = taskConfig.getImplicitConvergenceCriterion(getUserCodeClassLoader());
+			implicitConvergenceAggregatorName = taskConfig.getImplicitConvergenceCriterionAggregatorName();
+			Preconditions.checkNotNull(implicitConvergenceAggregatorName);
+		}
+
 		maxNumberOfIterations = taskConfig.getNumberOfIterations();
-		
+
 		// set up the event handler
 		int numEventsTillEndOfSuperstep = taskConfig.getNumberOfEventsUntilInterruptInIterativeGate(0);
 		eventHandler = new SyncEventHandler(numEventsTillEndOfSuperstep, aggregators,
@@ -102,10 +122,9 @@ public class IterationSynchronizationSinkTask extends AbstractInvokable implemen
 		headEventReader.registerTaskEventListener(eventHandler, WorkerDoneEvent.class);
 
 		IntValue dummy = new IntValue();
-		
+
 		while (!terminationRequested()) {
 
-//			notifyMonitor(IterationMonitoring.Event.SYNC_STARTING, currentIteration);
 			if (log.isInfoEnabled()) {
 				log.info(formatLogString("starting iteration [" + currentIteration + "]"));
 			}
@@ -125,7 +144,6 @@ public class IterationSynchronizationSinkTask extends AbstractInvokable implemen
 
 				requestTermination();
 				sendToAllWorkers(new TerminationEvent());
-//				notifyMonitor(IterationMonitoring.Event.SYNC_FINISHED, currentIteration);
 			} else {
 				if (log.isInfoEnabled()) {
 					log.info(formatLogString("signaling that all workers are done in iteration [" + currentIteration
@@ -134,23 +152,15 @@ public class IterationSynchronizationSinkTask extends AbstractInvokable implemen
 
 				AllWorkersDoneEvent allWorkersDoneEvent = new AllWorkersDoneEvent(aggregators);
 				sendToAllWorkers(allWorkersDoneEvent);
-				
+
 				// reset all aggregators
 				for (Aggregator<?> agg : aggregators.values()) {
 					agg.reset();
 				}
-				
-//				notifyMonitor(IterationMonitoring.Event.SYNC_FINISHED, currentIteration);
 				currentIteration++;
 			}
 		}
 	}
-
-//	protected void notifyMonitor(IterationMonitoring.Event event, int currentIteration) {
-//		if (log.isInfoEnabled()) {
-//			log.info(IterationMonitoring.logLine(getEnvironment().getJobID(), event, currentIteration, 1));
-//		}
-//	}
 
 	private boolean checkForConvergence() {
 		if (maxNumberOfIterations == currentIteration) {
@@ -167,7 +177,7 @@ public class IterationSynchronizationSinkTask extends AbstractInvokable implemen
 			if (aggregator == null) {
 				throw new RuntimeException("Error: Aggregator for convergence criterion was null.");
 			}
-			
+
 			Value aggregate = aggregator.getAggregate();
 
 			if (convergenceCriterion.isConverged(currentIteration, aggregate)) {
@@ -178,17 +188,35 @@ public class IterationSynchronizationSinkTask extends AbstractInvokable implemen
 				return true;
 			}
 		}
-		
+
+		if (implicitConvergenceAggregatorName != null) {
+			@SuppressWarnings("unchecked")
+			Aggregator<Value> aggregator = (Aggregator<Value>) aggregators.get(implicitConvergenceAggregatorName);
+			if (aggregator == null) {
+				throw new RuntimeException("Error: Aggregator for default convergence criterion was null.");
+			}
+
+			Value aggregate = aggregator.getAggregate();
+
+			if (implicitConvergenceCriterion.isConverged(currentIteration, aggregate)) {
+				if (log.isInfoEnabled()) {
+					log.info(formatLogString("empty workset convergence reached after [" + currentIteration
+							+ "] iterations, terminating..."));
+				}
+				return true;
+			}
+		}
+
 		return false;
 	}
 
 	private void readHeadEventChannel(IntValue rec) throws IOException {
 		// reset the handler
 		eventHandler.resetEndOfSuperstep();
-		
+
 		// read (and thereby process all events in the handler's event handling functions)
 		try {
-			while (this.headEventReader.next(rec)) {
+			if (this.headEventReader.next(rec)) {
 				throw new RuntimeException("Synchronization task must not see any records!");
 			}
 		} catch (InterruptedException iex) {
@@ -204,11 +232,11 @@ public class IterationSynchronizationSinkTask extends AbstractInvokable implemen
 	}
 
 	private String formatLogString(String message) {
-		return BatchTask.constructLogString(message, getEnvironment().getTaskName(), this);
+		return BatchTask.constructLogString(message, getEnvironment().getTaskInfo().getTaskName(), this);
 	}
-	
+
 	// --------------------------------------------------------------------------------------------
-	
+
 	@Override
 	public boolean terminationRequested() {
 		return terminated.get();

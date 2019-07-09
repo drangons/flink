@@ -26,9 +26,9 @@ import org.apache.flink.graph.Edge;
 import org.apache.flink.graph.Graph;
 import org.apache.flink.graph.GraphAlgorithm;
 import org.apache.flink.graph.Vertex;
+import org.apache.flink.graph.spargel.GatherFunction;
 import org.apache.flink.graph.spargel.MessageIterator;
-import org.apache.flink.graph.spargel.MessagingFunction;
-import org.apache.flink.graph.spargel.VertexUpdateFunction;
+import org.apache.flink.graph.spargel.ScatterFunction;
 
 import java.util.Map;
 import java.util.TreeMap;
@@ -36,34 +36,34 @@ import java.util.TreeMap;
 /**
  * Community Detection Algorithm.
  *
- * The Vertex values of the input Graph provide the initial label assignments.
- * 
- * Initially, each vertex is assigned a tuple formed of its own initial value along with a score equal to 1.0.
+ * <p>The Vertex values of the input Graph provide the initial label assignments.
+ *
+ * <p>Initially, each vertex is assigned a tuple formed of its own initial value along with a score equal to 1.0.
  * The vertices propagate their labels and max scores in iterations, each time adopting the label with the
  * highest score from the list of received messages. The chosen label is afterwards re-scored using the fraction
  * delta/the superstep number. Delta is passed as a parameter and has 0.5 as a default value.
- * 
- * @param <K> the Vertex ID type 
+ *
+ * @param <K> the Vertex ID type
  *
  */
 public class CommunityDetection<K> implements GraphAlgorithm<K, Long, Double, Graph<K, Long, Double>> {
 
-	private Integer maxIterations;
+	private int maxIterations;
 
-	private Double delta;
+	private double delta;
 
 	/**
 	 * Creates a new Community Detection algorithm instance.
 	 * The algorithm converges when vertices no longer update their value
 	 * or when the maximum number of iterations is reached.
-	 * 
+	 *
 	 * @see <a href="http://arxiv.org/pdf/0808.2633.pdf">
 	 * Towards real-time community detection in large networks</a>
-	 * 
+	 *
 	 * @param maxIterations The maximum number of iterations to run.
-	 * @param delta The hop attenuation parameter. Its default value is 0.5.  
+	 * @param delta The hop attenuation parameter. Its default value is 0.5.
 	 */
-	public CommunityDetection(Integer maxIterations, Double delta) {
+	public CommunityDetection(int maxIterations, double delta) {
 
 		this.maxIterations = maxIterations;
 		this.delta = delta;
@@ -73,23 +73,37 @@ public class CommunityDetection<K> implements GraphAlgorithm<K, Long, Double, Gr
 	public Graph<K, Long, Double> run(Graph<K, Long, Double> graph) {
 
 		DataSet<Vertex<K, Tuple2<Long, Double>>> initializedVertices = graph.getVertices()
-				.map(new AddScoreToVertexValuesMapper<K>());
+			.map(new AddScoreToVertexValuesMapper<>());
 
 		Graph<K, Tuple2<Long, Double>, Double> graphWithScoredVertices =
-				Graph.fromDataSet(initializedVertices, graph.getEdges(), graph.getContext()).getUndirected();
+			Graph.fromDataSet(initializedVertices, graph.getEdges(), graph.getContext()).getUndirected();
 
-		return graphWithScoredVertices.runVertexCentricIteration(new VertexLabelUpdater<K>(delta),
-				new LabelMessenger<K>(), maxIterations)
-				.mapVertices(new RemoveScoreFromVertexValuesMapper<K>());
+		return graphWithScoredVertices.runScatterGatherIteration(new LabelMessenger<>(),
+			new VertexLabelUpdater<>(delta), maxIterations)
+				.mapVertices(new RemoveScoreFromVertexValuesMapper<>());
 	}
 
 	@SuppressWarnings("serial")
-	public static final class VertexLabelUpdater<K> extends VertexUpdateFunction<
-		K, Tuple2<Long, Double>, Tuple2<Long, Double>> {
+	private static final class LabelMessenger<K> extends ScatterFunction<K, Tuple2<Long, Double>,
+			Tuple2<Long, Double>, Double> {
 
-		private Double delta;
+		@Override
+		public void sendMessages(Vertex<K, Tuple2<Long, Double>> vertex) throws Exception {
 
-		public VertexLabelUpdater(Double delta) {
+			for (Edge<K, Double> edge : getEdges()) {
+				sendMessageTo(edge.getTarget(), new Tuple2<>(vertex.getValue().f0,
+					vertex.getValue().f1 * edge.getValue()));
+			}
+		}
+	}
+
+	@SuppressWarnings("serial")
+	private static final class VertexLabelUpdater<K> extends GatherFunction<
+			K, Tuple2<Long, Double>, Tuple2<Long, Double>> {
+
+		private double delta;
+
+		public VertexLabelUpdater(double delta) {
 			this.delta = delta;
 		}
 
@@ -98,17 +112,17 @@ public class CommunityDetection<K> implements GraphAlgorithm<K, Long, Double, Gr
 								MessageIterator<Tuple2<Long, Double>> inMessages) throws Exception {
 
 			// we would like these two maps to be ordered
-			Map<Long, Double> receivedLabelsWithScores = new TreeMap<Long, Double>();
-			Map<Long, Double> labelsWithHighestScore = new TreeMap<Long, Double>();
+			Map<Long, Double> receivedLabelsWithScores = new TreeMap<>();
+			Map<Long, Double> labelsWithHighestScore = new TreeMap<>();
 
 			for (Tuple2<Long, Double> message : inMessages) {
 				// split the message into received label and score
-				Long receivedLabel = message.f0;
-				Double receivedScore = message.f1;
+				long receivedLabel = message.f0;
+				double receivedScore = message.f1;
 
 				// if the label was received before
 				if (receivedLabelsWithScores.containsKey(receivedLabel)) {
-					Double newScore = receivedScore + receivedLabelsWithScores.get(receivedLabel);
+					double newScore = receivedScore + receivedLabelsWithScores.get(receivedLabel);
 					receivedLabelsWithScores.put(receivedLabel, newScore);
 				} else {
 					// first time we see the label
@@ -117,7 +131,7 @@ public class CommunityDetection<K> implements GraphAlgorithm<K, Long, Double, Gr
 
 				// store the labels with the highest scores
 				if (labelsWithHighestScore.containsKey(receivedLabel)) {
-					Double currentScore = labelsWithHighestScore.get(receivedLabel);
+					double currentScore = labelsWithHighestScore.get(receivedLabel);
 					if (currentScore < receivedScore) {
 						// record the highest score
 						labelsWithHighestScore.put(receivedLabel, receivedScore);
@@ -128,11 +142,11 @@ public class CommunityDetection<K> implements GraphAlgorithm<K, Long, Double, Gr
 				}
 			}
 
-			if(receivedLabelsWithScores.size() > 0) {
+			if (receivedLabelsWithScores.size() > 0) {
 				// find the label with the highest score from the ones received
-				Double maxScore = -Double.MAX_VALUE;
-				Long maxScoreLabel = vertex.getValue().f0;
-				for (Long curLabel : receivedLabelsWithScores.keySet()) {
+				double maxScore = -Double.MAX_VALUE;
+				long maxScoreLabel = vertex.getValue().f0;
+				for (long curLabel : receivedLabelsWithScores.keySet()) {
 
 					if (receivedLabelsWithScores.get(curLabel) > maxScore) {
 						maxScore = receivedLabelsWithScores.get(curLabel);
@@ -141,45 +155,30 @@ public class CommunityDetection<K> implements GraphAlgorithm<K, Long, Double, Gr
 				}
 
 				// find the highest score of maxScoreLabel
-				Double highestScore = labelsWithHighestScore.get(maxScoreLabel);
+				double highestScore = labelsWithHighestScore.get(maxScoreLabel);
 				// re-score the new label
 				if (maxScoreLabel != vertex.getValue().f0) {
 					highestScore -= delta / getSuperstepNumber();
 				}
 				// else delta = 0
 				// update own label
-				setNewVertexValue(new Tuple2<Long, Double>(maxScoreLabel, highestScore));
-			}
-		}
-	}
-
-	@SuppressWarnings("serial")
-	public static final class LabelMessenger<K> extends MessagingFunction<K, Tuple2<Long, Double>,
-			Tuple2<Long, Double>, Double> {
-
-		@Override
-		public void sendMessages(Vertex<K, Tuple2<Long, Double>> vertex) throws Exception {
-
-			for(Edge<K, Double> edge : getEdges()) {
-				sendMessageTo(edge.getTarget(), new Tuple2<Long, Double>(vertex.getValue().f0,
-						vertex.getValue().f1 * edge.getValue()));
+				setNewVertexValue(new Tuple2<>(maxScoreLabel, highestScore));
 			}
 		}
 	}
 
 	@SuppressWarnings("serial")
 	@ForwardedFields("f0")
-	public static final class AddScoreToVertexValuesMapper<K> implements MapFunction<
+	private static final class AddScoreToVertexValuesMapper<K> implements MapFunction<
 		Vertex<K, Long>, Vertex<K, Tuple2<Long, Double>>> {
 
 		public Vertex<K, Tuple2<Long, Double>> map(Vertex<K, Long> vertex) {
-			return new Vertex<K, Tuple2<Long, Double>>(
-					vertex.getId(), new Tuple2<Long, Double>(vertex.getValue(), 1.0));
+			return new Vertex<>(vertex.getId(), new Tuple2<>(vertex.getValue(), 1.0));
 		}
 	}
 
 	@SuppressWarnings("serial")
-	public static final class RemoveScoreFromVertexValuesMapper<K> implements MapFunction<
+	private static final class RemoveScoreFromVertexValuesMapper<K> implements MapFunction<
 		Vertex<K, Tuple2<Long, Double>>, Long> {
 
 		@Override

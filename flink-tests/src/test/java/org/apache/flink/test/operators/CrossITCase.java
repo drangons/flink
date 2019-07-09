@@ -18,180 +18,440 @@
 
 package org.apache.flink.test.operators;
 
-import org.apache.flink.api.common.Plan;
-import org.apache.flink.api.java.record.functions.CrossFunction;
-import org.apache.flink.api.java.record.io.DelimitedInputFormat;
-import org.apache.flink.api.java.record.operators.CrossOperator;
-import org.apache.flink.api.java.record.operators.FileDataSink;
-import org.apache.flink.api.java.record.operators.FileDataSource;
-import org.apache.flink.optimizer.Optimizer;
+import org.apache.flink.api.common.functions.CrossFunction;
+import org.apache.flink.api.common.functions.RichCrossFunction;
+import org.apache.flink.api.java.DataSet;
+import org.apache.flink.api.java.ExecutionEnvironment;
+import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.api.java.tuple.Tuple3;
+import org.apache.flink.api.java.tuple.Tuple5;
+import org.apache.flink.api.java.tuple.Tuple6;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.test.operators.io.ContractITCaseIOFormats.ContractITCaseInputFormat;
-import org.apache.flink.test.operators.io.ContractITCaseIOFormats.ContractITCaseOutputFormat;
-import org.apache.flink.test.util.RecordAPITestBase;
-import org.apache.flink.types.IntValue;
-import org.apache.flink.types.Record;
-import org.apache.flink.types.StringValue;
+import org.apache.flink.test.operators.util.CollectionDataSets;
+import org.apache.flink.test.operators.util.CollectionDataSets.CustomType;
+import org.apache.flink.test.util.MultipleProgramsTestBase;
+
+import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
-import org.junit.runners.Parameterized.Parameters;
 
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.Serializable;
 import java.util.Collection;
-import java.util.LinkedList;
+import java.util.List;
 
-@SuppressWarnings("deprecation")
+/**
+ * Integration tests for {@link CrossFunction} and {@link RichCrossFunction}.
+ */
 @RunWith(Parameterized.class)
-public class CrossITCase extends RecordAPITestBase {
+public class CrossITCase extends MultipleProgramsTestBase {
 
-	private String leftInPath = null;
-	private String rightInPath = null;
-	private String resultPath = null;
-
-	public CrossITCase(Configuration testConfig) {
-		super(testConfig);
+	public CrossITCase(TestExecutionMode mode){
+		super(mode);
 	}
 
-	//private static final String LEFT_IN = "1 1\n2 2\n1 1\n2 2\n3 3\n4 4\n3 3\n4 4\n";
+	@Test
+	public void testCorretnessOfCrossOnTwoTupleInputs() throws Exception {
+		/*
+		 * check correctness of cross on two tuple inputs
+		 */
 
-	//private static final String RIGHT_IN = "1 1\n1 2\n2 2\n2 4\n3 3\n3 6\n4 4\n4 8\n";
+		final ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
 
-	//private static final String RESULT = "4 1\n4 1\n4 2\n4 2\n5 2\n5 2\n5 4\n5 4\n6 3\n6 3\n7 4\n7 4\n"
-	//	+ "5 0\n5 0\n5 1\n5 1\n6 1\n6 1\n6 3\n6 3\n7 2\n7 2\n8 3\n8 3\n"
-	//	+ "6 -1\n6 -1\n6 0\n6 0\n7 0\n7 0\n8 1\n8 1\n" + "7 -2\n7 -2\n7 -1\n7 -1\n8 -1\n8 -1\n";
+		DataSet<Tuple5<Integer, Long, Integer, String, Long>> ds = CollectionDataSets.getSmall5TupleDataSet(env);
+		DataSet<Tuple5<Integer, Long, Integer, String, Long>> ds2 = CollectionDataSets.getSmall5TupleDataSet(env);
+		DataSet<Tuple2<Integer, String>> crossDs = ds.cross(ds2).with(new Tuple5Cross());
 
-	//private static final String RESULT = "10 1\n10 1\n10 5\n10 5\n4 1\n4 1\n4 2\n4 2\n5 0\n5 0\n5 1\n," +
-	//		"5 1\n5 2\n5 2\n5 4\n5 4\n6 -1\n6 -1\n6 0\n6 0\n6 1\n6 1\n6 3\n6 3\n6 3\n6 3\n6 6\n6 6\n7 -1\n" +
-	//		"7 -1\n7 -2\n7 -2\n7 0\n7 0\n7 2\n7 2\n7 2\n7 2\n7 4\n7 4\n7 5\n7 5\n7 8\n7 8\n8 -1\n8 -1\n8 1\n" +
-	//		"8 1\n8 1\n8 1\n8 3\n8 3\n8 4\n8 4\n8 7\n8 7\n9 0\n9 0\n9 2\n9 2\n9 3\n9 3\n9 6\n9 6\n";
+		List<Tuple2<Integer, String>> result = crossDs.collect();
 
-	//private static final String RESULT = "2 2\n4 4\n1 1\n3 3\n2 2\n4 4\n1 1\n3 3\n5 0\n5 1\n6 1\n 6 3\n" +
-	//		"7 2\n7 5\n8 3\n8 7\n7 -2\n7 -1\n8 -1\n8 1\n9 0\n9 3\n10 1\n10 5\n4 1\n4 2\n5 2\n5 4\n6 3\n" +
-	//		"6 6\n7 4\n7 8\n6 -1\n6 0\n7 0\n7 2\n8 1\n8 4\n9 2\n9 6\n5 0\n5 1\n6 1\n6 3\n7 2\n7 5\n 8 3\n" +
-	//		"8 7\n7 -2\n7 -1\n8 -1\n8 1\n9 0\n9 3\n10 1\n10 5\n4 1\n4 2\n5 2\n5 4\n6 3\n6 6\n7 4\n7 8\n" +
-	//		"6 -1\n6 0\n7 0\n7 2\n8 1\n8 4\n9 2\n9 6";
+		String expected = "0,HalloHallo\n" +
+				"1,HalloHallo Welt\n" +
+				"2,HalloHallo Welt wie\n" +
+				"1,Hallo WeltHallo\n" +
+				"2,Hallo WeltHallo Welt\n" +
+				"3,Hallo WeltHallo Welt wie\n" +
+				"2,Hallo Welt wieHallo\n" +
+				"3,Hallo Welt wieHallo Welt\n" +
+				"4,Hallo Welt wieHallo Welt wie\n";
 
-
-	private static final String LEFT_IN = "1 1\n2 2\n3 3\n";
-	private static final String RIGHT_IN = "3 6\n4 4\n4 8\n";
-
-	private static final String RESULT = "6 6\n7 5\n7 8\n7 4\n8 3\n8 7\n8 4\n9 2\n9 6\n";
-
-	@Override
-	protected void preSubmit() throws Exception {
-		leftInPath = createTempFile("left_in.txt", LEFT_IN);
-		rightInPath = createTempFile("right_in.txt", RIGHT_IN);
-		resultPath = getTempDirPath("result");
+		compareResultAsTuples(result, expected);
 	}
 
+	@Test
+	public void testCorrectnessOfCrossIfUDFReturnsLeftInputObject() throws Exception {
+		/*
+		 * check correctness of cross if UDF returns left input object
+		 */
 
-	public static class TestCross extends CrossFunction implements Serializable {
+		final ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
+
+		DataSet<Tuple3<Integer, Long, String>> ds = CollectionDataSets.getSmall3TupleDataSet(env);
+		DataSet<Tuple5<Integer, Long, Integer, String, Long>> ds2 = CollectionDataSets.getSmall5TupleDataSet(env);
+		DataSet<Tuple3<Integer, Long, String>> crossDs = ds.cross(ds2).with(new Tuple3ReturnLeft());
+
+		List<Tuple3<Integer, Long, String>> result = crossDs.collect();
+
+		String expected = "1,1,Hi\n" +
+				"1,1,Hi\n" +
+				"1,1,Hi\n" +
+				"2,2,Hello\n" +
+				"2,2,Hello\n" +
+				"2,2,Hello\n" +
+				"3,2,Hello world\n" +
+				"3,2,Hello world\n" +
+				"3,2,Hello world\n";
+
+		compareResultAsTuples(result, expected);
+	}
+
+	@Test
+	public void testCorrectnessOfCrossIfUDFReturnsRightInputObject() throws Exception {
+		/*
+		 * check correctness of cross if UDF returns right input object
+		 */
+
+		final ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
+
+		DataSet<Tuple3<Integer, Long, String>> ds = CollectionDataSets.getSmall3TupleDataSet(env);
+		DataSet<Tuple5<Integer, Long, Integer, String, Long>> ds2 = CollectionDataSets.getSmall5TupleDataSet(env);
+		DataSet<Tuple5<Integer, Long, Integer, String, Long>> crossDs = ds.cross(ds2).with(new Tuple5ReturnRight());
+
+		List<Tuple5<Integer, Long, Integer, String, Long>> result = crossDs
+				.collect();
+
+		String expected = "1,1,0,Hallo,1\n" +
+				"1,1,0,Hallo,1\n" +
+				"1,1,0,Hallo,1\n" +
+				"2,2,1,Hallo Welt,2\n" +
+				"2,2,1,Hallo Welt,2\n" +
+				"2,2,1,Hallo Welt,2\n" +
+				"2,3,2,Hallo Welt wie,1\n" +
+				"2,3,2,Hallo Welt wie,1\n" +
+				"2,3,2,Hallo Welt wie,1\n";
+
+		compareResultAsTuples(result, expected);
+	}
+
+	@Test
+	public void testCorrectnessOfCrossWithBroadcastSet() throws Exception {
+		/*
+		 * check correctness of cross with broadcast set
+		 */
+
+		final ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
+
+		DataSet<Integer> intDs = CollectionDataSets.getIntegerDataSet(env);
+
+		DataSet<Tuple5<Integer, Long, Integer, String, Long>> ds = CollectionDataSets.getSmall5TupleDataSet(env);
+		DataSet<Tuple5<Integer, Long, Integer, String, Long>> ds2 = CollectionDataSets.getSmall5TupleDataSet(env);
+		DataSet<Tuple3<Integer, Integer, Integer>> crossDs = ds.cross(ds2).with(new Tuple5CrossBC()).withBroadcastSet(intDs, "ints");
+
+		List<Tuple3<Integer, Integer, Integer>> result = crossDs.collect();
+
+		String expected = "2,0,55\n" +
+				"3,0,55\n" +
+				"3,0,55\n" +
+				"3,0,55\n" +
+				"4,1,55\n" +
+				"4,2,55\n" +
+				"3,0,55\n" +
+				"4,2,55\n" +
+				"4,4,55\n";
+
+		compareResultAsTuples(result, expected);
+	}
+
+	@Test
+	public void testCorrectnessOfCrossWithHuge() throws Exception {
+		/*
+		 * check correctness of crossWithHuge (only correctness of result -> should be the same as with normal cross)
+		 */
+
+		final ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
+
+		DataSet<Tuple5<Integer, Long, Integer, String, Long>> ds = CollectionDataSets.getSmall5TupleDataSet(env);
+		DataSet<Tuple5<Integer, Long, Integer, String, Long>> ds2 = CollectionDataSets.getSmall5TupleDataSet(env);
+		DataSet<Tuple2<Integer, String>> crossDs = ds.crossWithHuge(ds2).with(new Tuple5Cross());
+
+		List<Tuple2<Integer, String>> result = crossDs.collect();
+
+		String expected = "0,HalloHallo\n" +
+				"1,HalloHallo Welt\n" +
+				"2,HalloHallo Welt wie\n" +
+				"1,Hallo WeltHallo\n" +
+				"2,Hallo WeltHallo Welt\n" +
+				"3,Hallo WeltHallo Welt wie\n" +
+				"2,Hallo Welt wieHallo\n" +
+				"3,Hallo Welt wieHallo Welt\n" +
+				"4,Hallo Welt wieHallo Welt wie\n";
+
+		compareResultAsTuples(result, expected);
+	}
+
+	@Test
+	public void testCorrectnessOfCrossWithTiny() throws Exception {
+		/*
+		 * check correctness of crossWithTiny (only correctness of result -> should be the same as with normal cross)
+		 */
+
+		final ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
+
+		DataSet<Tuple5<Integer, Long, Integer, String, Long>> ds = CollectionDataSets.getSmall5TupleDataSet(env);
+		DataSet<Tuple5<Integer, Long, Integer, String, Long>> ds2 = CollectionDataSets.getSmall5TupleDataSet(env);
+		DataSet<Tuple2<Integer, String>> crossDs = ds.crossWithTiny(ds2).with(new Tuple5Cross());
+
+		List<Tuple2<Integer, String>> result = crossDs.collect();
+
+		String expected = "0,HalloHallo\n" +
+				"1,HalloHallo Welt\n" +
+				"2,HalloHallo Welt wie\n" +
+				"1,Hallo WeltHallo\n" +
+				"2,Hallo WeltHallo Welt\n" +
+				"3,Hallo WeltHallo Welt wie\n" +
+				"2,Hallo Welt wieHallo\n" +
+				"3,Hallo Welt wieHallo Welt\n" +
+				"4,Hallo Welt wieHallo Welt wie\n";
+
+		compareResultAsTuples(result, expected);
+	}
+
+	@Test
+	public void testProjectCrossOnATupleInput1() throws Exception{
+		/*
+		 * project cross on a tuple input 1
+		 */
+
+		final ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
+
+		DataSet<Tuple3<Integer, Long, String>> ds = CollectionDataSets.getSmall3TupleDataSet(env);
+		DataSet<Tuple5<Integer, Long, Integer, String, Long>> ds2 = CollectionDataSets.getSmall5TupleDataSet(env);
+		DataSet<Tuple6<String, Long, String, Integer, Long, Long>> crossDs = ds.cross(ds2)
+				.projectFirst(2, 1)
+				.projectSecond(3)
+				.projectFirst(0)
+				.projectSecond(4, 1);
+
+		List<Tuple6<String, Long, String, Integer, Long, Long>> result = crossDs.collect();
+
+		String expected = "Hi,1,Hallo,1,1,1\n" +
+				"Hi,1,Hallo Welt,1,2,2\n" +
+				"Hi,1,Hallo Welt wie,1,1,3\n" +
+				"Hello,2,Hallo,2,1,1\n" +
+				"Hello,2,Hallo Welt,2,2,2\n" +
+				"Hello,2,Hallo Welt wie,2,1,3\n" +
+				"Hello world,2,Hallo,3,1,1\n" +
+				"Hello world,2,Hallo Welt,3,2,2\n" +
+				"Hello world,2,Hallo Welt wie,3,1,3\n";
+
+		compareResultAsTuples(result, expected);
+	}
+
+	@Test
+	public void testProjectCrossOnATupleInput2() throws Exception {
+		/*
+		 * project cross on a tuple input 2
+		 */
+
+		final ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
+
+		DataSet<Tuple3<Integer, Long, String>> ds = CollectionDataSets.getSmall3TupleDataSet(env);
+		DataSet<Tuple5<Integer, Long, Integer, String, Long>> ds2 = CollectionDataSets.getSmall5TupleDataSet(env);
+		DataSet<Tuple6<String, String, Long, Long, Long, Integer>> crossDs = ds.cross(ds2)
+				.projectSecond(3)
+				.projectFirst(2, 1)
+				.projectSecond(4, 1)
+				.projectFirst(0);
+
+		List<Tuple6<String, String, Long, Long, Long, Integer>> result = crossDs.collect();
+
+		String expected = "Hallo,Hi,1,1,1,1\n" +
+				"Hallo Welt,Hi,1,2,2,1\n" +
+				"Hallo Welt wie,Hi,1,1,3,1\n" +
+				"Hallo,Hello,2,1,1,2\n" +
+				"Hallo Welt,Hello,2,2,2,2\n" +
+				"Hallo Welt wie,Hello,2,1,3,2\n" +
+				"Hallo,Hello world,2,1,1,3\n" +
+				"Hallo Welt,Hello world,2,2,2,3\n" +
+				"Hallo Welt wie,Hello world,2,1,3,3\n";
+
+		compareResultAsTuples(result, expected);
+	}
+
+	@Test
+	public void testCorrectnessOfDefaultCross() throws Exception {
+		/*
+		 * check correctness of default cross
+		 */
+
+		final ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
+
+		DataSet<Tuple3<Integer, Long, String>> ds = CollectionDataSets.getSmall3TupleDataSet(env);
+		DataSet<Tuple5<Integer, Long, Integer, String, Long>> ds2 = CollectionDataSets.getSmall5TupleDataSet(env);
+		DataSet<Tuple2<Tuple3<Integer, Long, String>, Tuple5<Integer, Long, Integer, String, Long>>> crossDs = ds.cross(ds2);
+
+		List<Tuple2<Tuple3<Integer, Long, String>, Tuple5<Integer, Long, Integer, String, Long>>> result = crossDs.collect();
+
+		String expected = "(1,1,Hi),(2,2,1,Hallo Welt,2)\n"
+				+
+				"(1,1,Hi),(1,1,0,Hallo,1)\n" +
+				"(1,1,Hi),(2,3,2,Hallo Welt wie,1)\n" +
+				"(2,2,Hello),(2,2,1,Hallo Welt,2)\n" +
+				"(2,2,Hello),(1,1,0,Hallo,1)\n" +
+				"(2,2,Hello),(2,3,2,Hallo Welt wie,1)\n" +
+				"(3,2,Hello world),(2,2,1,Hallo Welt,2)\n" +
+				"(3,2,Hello world),(1,1,0,Hallo,1)\n" +
+				"(3,2,Hello world),(2,3,2,Hallo Welt wie,1)\n";
+
+		compareResultAsTuples(result, expected);
+	}
+
+	@Test
+	public void testCorrectnessOfCrossOnTwoCustomTypeInputs() throws Exception {
+		/*
+		 * check correctness of cross on two custom type inputs
+		 */
+
+		final ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
+
+		DataSet<CustomType> ds = CollectionDataSets.getSmallCustomTypeDataSet(env);
+		DataSet<CustomType> ds2 = CollectionDataSets.getSmallCustomTypeDataSet(env);
+		DataSet<CustomType> crossDs = ds.cross(ds2).with(new CustomTypeCross());
+
+		List<CustomType> result = crossDs.collect();
+
+		String expected = "1,0,HiHi\n"
+				+ "2,1,HiHello\n"
+				+ "2,2,HiHello world\n"
+				+ "2,1,HelloHi\n"
+				+ "4,2,HelloHello\n"
+				+ "4,3,HelloHello world\n"
+				+ "2,2,Hello worldHi\n"
+				+ "4,3,Hello worldHello\n"
+				+ "4,4,Hello worldHello world";
+
+		compareResultAsText(result, expected);
+	}
+
+	@Test
+	public void testCorrectnessOfCrossATupleInputAndACustomTypeInput() throws Exception {
+		/*
+		 * check correctness of cross a tuple input and a custom type input
+		 */
+
+		final ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
+
+		DataSet<Tuple5<Integer, Long, Integer, String, Long>> ds = CollectionDataSets.getSmall5TupleDataSet(env);
+		DataSet<CustomType> ds2 = CollectionDataSets.getSmallCustomTypeDataSet(env);
+		DataSet<Tuple3<Integer, Long, String>> crossDs = ds.cross(ds2).with(new MixedCross());
+
+		List<Tuple3<Integer, Long, String>> result = crossDs.collect();
+
+		String expected = "2,0,HalloHi\n" +
+				"3,0,HalloHello\n" +
+				"3,0,HalloHello world\n" +
+				"3,0,Hallo WeltHi\n" +
+				"4,1,Hallo WeltHello\n" +
+				"4,2,Hallo WeltHello world\n" +
+				"3,0,Hallo Welt wieHi\n" +
+				"4,2,Hallo Welt wieHello\n" +
+				"4,4,Hallo Welt wieHello world\n";
+
+		compareResultAsTuples(result, expected);
+	}
+
+	private static class Tuple5Cross implements CrossFunction<Tuple5<Integer, Long, Integer, String, Long>, Tuple5<Integer, Long, Integer, String, Long>, Tuple2<Integer, String>> {
+
 		private static final long serialVersionUID = 1L;
 
-		private StringValue string = new StringValue();
-		private IntValue integer = new IntValue();
-		
 		@Override
-		public Record cross(Record record1, Record record2) throws Exception {
-			string = record1.getField(1, string);
-			int val1 = Integer.parseInt(string.toString());
-			string = record2.getField(1, string);
-			int val2 = Integer.parseInt(string.toString());
-			string = record1.getField(0, string);
-			int key1 = Integer.parseInt(string.toString());
-			string = record2.getField(0, string);
-			int key2 = Integer.parseInt(string.toString());
+		public Tuple2<Integer, String> cross(
+				Tuple5<Integer, Long, Integer, String, Long> first,
+				Tuple5<Integer, Long, Integer, String, Long> second)
+				throws Exception {
 
-			string.setValue((key1 + key2 + 2) + "");
-			integer.setValue(val2 - val1 + 1);
-
-			record1.setField(0, string);
-			record1.setField(1, integer);
-
-			return record1;
+				return new Tuple2<Integer, String>(first.f2 + second.f2, first.f3 + second.f3);
 		}
 
 	}
 
-	@Override
-	protected Plan getTestJob() {
+	private static class CustomTypeCross implements CrossFunction<CustomType, CustomType, CustomType> {
 
-		FileDataSource input_left = new FileDataSource(
-				new ContractITCaseInputFormat(), leftInPath);
-		DelimitedInputFormat.configureDelimitedFormat(input_left)
-			.recordDelimiter('\n');
-		input_left.setParallelism(config.getInteger("CrossTest#NoSubtasks", 1));
+		private static final long serialVersionUID = 1L;
 
-		FileDataSource input_right = new FileDataSource(
-				new ContractITCaseInputFormat(), rightInPath);
-		DelimitedInputFormat.configureDelimitedFormat(input_right)
-			.recordDelimiter('\n');
-		input_right.setParallelism(config.getInteger("CrossTest#NoSubtasks", 1));
+		@Override
+		public CustomType cross(CustomType first, CustomType second)
+				throws Exception {
 
-		CrossOperator testCross = CrossOperator.builder(new TestCross()).build();
-		testCross.setParallelism(config.getInteger("CrossTest#NoSubtasks", 1));
-		testCross.getParameters().setString(Optimizer.HINT_LOCAL_STRATEGY,
-				config.getString("CrossTest#LocalStrategy", ""));
-		if (config.getString("CrossTest#ShipStrategy", "").equals("BROADCAST_FIRST")) {
-			testCross.getParameters().setString(Optimizer.HINT_SHIP_STRATEGY_FIRST_INPUT,
-					Optimizer.HINT_SHIP_STRATEGY_BROADCAST);
-			testCross.getParameters().setString(Optimizer.HINT_SHIP_STRATEGY_SECOND_INPUT,
-					Optimizer.HINT_SHIP_STRATEGY_FORWARD);
-		} else if (config.getString("CrossTest#ShipStrategy", "").equals("BROADCAST_SECOND")) {
-			testCross.getParameters().setString(Optimizer.HINT_SHIP_STRATEGY_FIRST_INPUT,
-					Optimizer.HINT_SHIP_STRATEGY_BROADCAST);
-			testCross.getParameters().setString(Optimizer.HINT_SHIP_STRATEGY_SECOND_INPUT,
-					Optimizer.HINT_SHIP_STRATEGY_FORWARD);
-		} else {
-			testCross.getParameters().setString(Optimizer.HINT_SHIP_STRATEGY,
-					config.getString("CrossTest#ShipStrategy", ""));
+			return new CustomType(first.myInt * second.myInt, first.myLong + second.myLong, first.myString + second.myString);
 		}
 
-		FileDataSink output = new FileDataSink(
-				new ContractITCaseOutputFormat(), resultPath);
-		output.setParallelism(1);
-
-		output.setInput(testCross);
-		testCross.setFirstInput(input_left);
-		testCross.setSecondInput(input_right);
-
-		return new Plan(output);
 	}
 
-	@Override
-	protected void postSubmit() throws Exception {
-		compareResultsByLinesInMemory(RESULT, resultPath);
+	private static class MixedCross implements CrossFunction<Tuple5<Integer, Long, Integer, String, Long>, CustomType, Tuple3<Integer, Long, String>> {
+
+		private static final long serialVersionUID = 1L;
+
+		@Override
+		public Tuple3<Integer, Long, String> cross(
+				Tuple5<Integer, Long, Integer, String, Long> first,
+				CustomType second) throws Exception {
+
+			return new Tuple3<Integer, Long, String>(first.f0 + second.myInt, first.f2 * second.myLong, first.f3 + second.myString);
+		}
+
 	}
 
-	@Parameters
-	public static Collection<Object[]> getConfigurations() throws FileNotFoundException, IOException {
+	private static class Tuple3ReturnLeft implements CrossFunction<Tuple3<Integer, Long, String>, Tuple5<Integer, Long, Integer, String, Long>, Tuple3<Integer, Long, String>> {
 
-		LinkedList<Configuration> tConfigs = new LinkedList<Configuration>();
+		private static final long serialVersionUID = 1L;
 
-		String[] localStrategies = { Optimizer.HINT_LOCAL_STRATEGY_NESTEDLOOP_BLOCKED_OUTER_FIRST,
-				Optimizer.HINT_LOCAL_STRATEGY_NESTEDLOOP_BLOCKED_OUTER_SECOND,
-				Optimizer.HINT_LOCAL_STRATEGY_NESTEDLOOP_STREAMED_OUTER_FIRST,
-				Optimizer.HINT_LOCAL_STRATEGY_NESTEDLOOP_STREAMED_OUTER_SECOND };
+		@Override
+		public Tuple3<Integer, Long, String> cross(
+				Tuple3<Integer, Long, String> first,
+				Tuple5<Integer, Long, Integer, String, Long> second) throws Exception {
 
-		String[] shipStrategies = { "BROADCAST_FIRST", "BROADCAST_SECOND"
-		// PactCompiler.HINT_SHIP_STRATEGY_BROADCAST
-		// PactCompiler.HINT_SHIP_STRATEGY_SFR
-		};
+			return first;
+		}
+	}
 
-		for (String localStrategy : localStrategies) {
-			for (String shipStrategy : shipStrategies) {
+	private static class Tuple5ReturnRight implements CrossFunction<Tuple3<Integer, Long, String>, Tuple5<Integer, Long, Integer, String, Long>, Tuple5<Integer, Long, Integer, String, Long>> {
 
-				Configuration config = new Configuration();
-				config.setString("CrossTest#LocalStrategy", localStrategy);
-				config.setString("CrossTest#ShipStrategy", shipStrategy);
-				config.setInteger("CrossTest#NoSubtasks", 4);
+		private static final long serialVersionUID = 1L;
 
-				tConfigs.add(config);
+		@Override
+		public Tuple5<Integer, Long, Integer, String, Long> cross(
+				Tuple3<Integer, Long, String> first,
+				Tuple5<Integer, Long, Integer, String, Long> second)
+				throws Exception {
+
+			return second;
+		}
+
+	}
+
+	private static class Tuple5CrossBC extends RichCrossFunction<Tuple5<Integer, Long, Integer, String, Long>, Tuple5<Integer, Long, Integer, String, Long>, Tuple3<Integer, Integer, Integer>> {
+
+		private static final long serialVersionUID = 1L;
+
+		private int broadcast = 42;
+
+		@Override
+		public void open(Configuration config) {
+
+			Collection<Integer> ints = this.getRuntimeContext().getBroadcastVariable("ints");
+			int sum = 0;
+			for (Integer i : ints) {
+				sum += i;
 			}
+			broadcast = sum;
+
 		}
 
-		return toParameterList(tConfigs);
+		@Override
+		public Tuple3<Integer, Integer, Integer> cross(
+				Tuple5<Integer, Long, Integer, String, Long> first,
+				Tuple5<Integer, Long, Integer, String, Long> second)
+				throws Exception {
+
+			return new Tuple3<Integer, Integer, Integer>(first.f0 + second.f0, first.f2 * second.f2, broadcast);
+		}
 	}
 }

@@ -16,32 +16,32 @@
  * limitations under the License.
  */
 
-
 package org.apache.flink.runtime.iterative.event;
-
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
-import java.util.Map;
 
 import org.apache.flink.api.common.aggregators.Aggregator;
 import org.apache.flink.core.memory.DataInputView;
+import org.apache.flink.core.memory.DataInputViewStreamWrapper;
 import org.apache.flink.core.memory.DataOutputView;
-import org.apache.flink.core.memory.InputViewDataInputStreamWrapper;
-import org.apache.flink.core.memory.OutputViewDataOutputStreamWrapper;
+import org.apache.flink.core.memory.DataOutputViewStreamWrapper;
 import org.apache.flink.runtime.event.TaskEvent;
 import org.apache.flink.types.Value;
 import org.apache.flink.util.InstantiationUtil;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.util.Map;
+
+/**
+ * Base class for iteration {@link TaskEvent} transmitting operator aggregators.
+ */
 public abstract class IterationEventWithAggregators extends TaskEvent {
-	
+
 	protected static final String[] NO_STRINGS = new String[0];
 	protected static final Value[] NO_VALUES = new Value[0];
-	
+
 	private String[] aggNames;
-	
+
 	private String[] classNames;
 	private byte[][] serializedData;
 
@@ -56,11 +56,11 @@ public abstract class IterationEventWithAggregators extends TaskEvent {
 		if (aggregatorName == null || aggregate == null) {
 			throw new NullPointerException();
 		}
-		
+
 		this.aggNames = new String[] { aggregatorName };
 		this.aggregates = new Value[] { aggregate };
 	}
-	
+
 	protected IterationEventWithAggregators(Map<String, Aggregator<?>> aggregators) {
 		int num = aggregators.size();
 		if (num == 0) {
@@ -69,7 +69,7 @@ public abstract class IterationEventWithAggregators extends TaskEvent {
 		} else {
 			this.aggNames = new String[num];
 			this.aggregates = new Value[num];
-			
+
 			int i = 0;
 			for (Map.Entry<String, Aggregator<?>> entry : aggregators.entrySet()) {
 				this.aggNames[i] = entry.getKey();
@@ -78,7 +78,7 @@ public abstract class IterationEventWithAggregators extends TaskEvent {
 			}
 		}
 	}
-	
+
 	public String[] getAggregatorNames() {
 		return this.aggNames;
 	}
@@ -100,19 +100,19 @@ public abstract class IterationEventWithAggregators extends TaskEvent {
 				catch (ClassCastException e) {
 					throw new RuntimeException("User-defined aggregator class is not a value sublass.");
 				}
-				
-				DataInputStream in = new DataInputStream(new ByteArrayInputStream(serializedData[i]));
-				try {
-					v.read(new InputViewDataInputStreamWrapper(in));
-					in.close();
-				} catch (IOException e) {
+
+				try (DataInputViewStreamWrapper in = new DataInputViewStreamWrapper(
+					new ByteArrayInputStream(serializedData[i]))) {
+					v.read(in);
+				}
+				catch (IOException e) {
 					throw new RuntimeException("Error while deserializing the user-defined aggregate class.", e);
 				}
-				
+
 				aggregates[i] = v;
 			}
 		}
-		
+
 		return this.aggregates;
 	}
 
@@ -120,17 +120,17 @@ public abstract class IterationEventWithAggregators extends TaskEvent {
 	public void write(DataOutputView out) throws IOException {
 		int num = this.aggNames.length;
 		out.writeInt(num);
-		
+
 		ByteArrayOutputStream boas = new ByteArrayOutputStream();
-		DataOutputStream bufferStream = new DataOutputStream(boas);
-		
+		DataOutputViewStreamWrapper bufferStream = new DataOutputViewStreamWrapper(boas);
+
 		for (int i = 0; i < num; i++) {
 			// aggregator name and type
 			out.writeUTF(this.aggNames[i]);
 			out.writeUTF(this.aggregates[i].getClass().getName());
-			
+
 			// aggregator value indirect as a byte array
-			this.aggregates[i].write(new OutputViewDataOutputStreamWrapper(bufferStream));
+			this.aggregates[i].write(bufferStream);
 			bufferStream.flush();
 			byte[] bytes = boas.toByteArray();
 			out.writeInt(bytes.length);
@@ -161,14 +161,14 @@ public abstract class IterationEventWithAggregators extends TaskEvent {
 			for (int i = 0; i < num; i++) {
 				this.aggNames[i] = in.readUTF();
 				this.classNames[i] = in.readUTF();
-				
+
 				int len = in.readInt();
 				byte[] data = new byte[len];
 				this.serializedData[i] = data;
 				in.readFully(data);
-				
+
 			}
-			
+
 			this.aggregates = null;
 		}
 	}

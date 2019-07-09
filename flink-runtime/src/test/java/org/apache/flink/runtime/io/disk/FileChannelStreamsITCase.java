@@ -21,6 +21,7 @@ package org.apache.flink.runtime.io.disk;
 import static org.junit.Assert.*;
 
 import org.apache.flink.core.memory.MemoryType;
+import org.apache.flink.util.TestLogger;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -40,7 +41,7 @@ import org.apache.flink.runtime.operators.testutils.PairGenerator.ValueMode;
 import java.io.EOFException;
 import java.util.List;
 
-public class FileChannelStreamsITCase {
+public class FileChannelStreamsITCase extends TestLogger {
 	
 	private static final long SEED = 649180756312423613L;
 
@@ -72,9 +73,8 @@ public class FileChannelStreamsITCase {
 	}
 
 	@After
-	public void afterTest() {
-		ioManager.shutdown();
-		assertTrue("I/O Manager was not properly shut down.", ioManager.isProperlyShutDown());
+	public void afterTest() throws Exception {
+		ioManager.close();
 		assertTrue("The memory has not been properly released", memManager.verifyEmpty());
 	}
 

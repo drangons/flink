@@ -19,12 +19,14 @@
 
 package org.apache.flink.types.parser;
 
+import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.types.ShortValue;
 
 /**
  * Parses a decimal text field into a {@link ShortValue}.
  * Only characters '1' to '0' and '-' are allowed.
  */
+@PublicEvolving
 public class ShortValueParser extends FieldParser<ShortValue> {
 	
 	private static final int OVERFLOW_BOUND = 0x7fff;
@@ -34,10 +36,16 @@ public class ShortValueParser extends FieldParser<ShortValue> {
 
 	@Override
 	public int parseField(byte[] bytes, int startPos, int limit, byte[] delimiter, ShortValue reusable) {
+
+		if (startPos == limit) {
+			setErrorState(ParseErrorState.EMPTY_COLUMN);
+			return -1;
+		}
+
 		int val = 0;
 		boolean neg = false;
 
-		final int delimLimit = limit-delimiter.length+1;
+		final int delimLimit = limit - delimiter.length + 1;
 		
 		this.result = reusable;
 		
@@ -55,7 +63,7 @@ public class ShortValueParser extends FieldParser<ShortValue> {
 		for (int i = startPos; i < limit; i++) {
 			if (i < delimLimit && delimiterNext(bytes, i, delimiter)) {
 				if (i == startPos) {
-					setErrorState(ParseErrorState.EMPTY_STRING);
+					setErrorState(ParseErrorState.EMPTY_COLUMN);
 					return -1;
 				}
 				reusable.setValue((short) (neg ? -val : val));
@@ -73,7 +81,7 @@ public class ShortValueParser extends FieldParser<ShortValue> {
 				return -1;
 			}
 		}
-		
+
 		reusable.setValue((short) (neg ? -val : val));
 		return limit;
 	}

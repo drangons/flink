@@ -21,7 +21,9 @@ package org.apache.flink.runtime.io.disk.iomanager;
 import org.apache.flink.core.memory.MemorySegment;
 import org.apache.flink.runtime.io.disk.iomanager.FileIOChannel.ID;
 import org.apache.flink.runtime.io.network.buffer.Buffer;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
 
 import java.io.File;
 import java.io.IOException;
@@ -34,24 +36,23 @@ import static org.junit.Assert.assertTrue;
 
 public class IOManagerTest {
 
+	@Rule
+	public final TemporaryFolder  temporaryFolder = new TemporaryFolder();
+
 	@Test
-	public void channelEnumerator() {
-		IOManager ioMan = null;
+	public void channelEnumerator() throws Exception {
+		File tempPath = temporaryFolder.newFolder();
 
-		try {
-			File tempPath = new File(System.getProperty("java.io.tmpdir"));
+		String[] tempDirs = new String[]{
+			new File(tempPath, "a").getAbsolutePath(),
+			new File(tempPath, "b").getAbsolutePath(),
+			new File(tempPath, "c").getAbsolutePath(),
+			new File(tempPath, "d").getAbsolutePath(),
+			new File(tempPath, "e").getAbsolutePath(),
+		};
 
-			String[] tempDirs = new String[]{
-					new File(tempPath, "a").getAbsolutePath(),
-					new File(tempPath, "b").getAbsolutePath(),
-					new File(tempPath, "c").getAbsolutePath(),
-					new File(tempPath, "d").getAbsolutePath(),
-					new File(tempPath, "e").getAbsolutePath(),
-			};
-
-			int[] counters = new int[tempDirs.length];
-
-			ioMan = new TestIOManager(tempDirs);
+		int[] counters = new int[tempDirs.length];
+		try (IOManager ioMan = new TestIOManager(tempDirs) ) {
 			FileIOChannel.Enumerator enumerator = ioMan.createChannelEnumerator();
 
 			for (int i = 0; i < 3 * tempDirs.length; i++) {
@@ -74,11 +75,6 @@ public class IOManagerTest {
 
 			for (int k = 0; k < tempDirs.length; k++) {
 				assertEquals(3, counters[k]);
-			}
-		}
-		finally {
-			if (ioMan != null) {
-				ioMan.shutdown();
 			}
 		}
 	}

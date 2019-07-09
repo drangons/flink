@@ -18,10 +18,6 @@
 
 package org.apache.flink.runtime.io.network;
 
-import org.apache.flink.runtime.io.network.buffer.NetworkBufferPool;
-import org.apache.flink.runtime.io.network.netty.PartitionRequestClient;
-import org.apache.flink.runtime.io.network.partition.ResultPartitionProvider;
-
 /**
  * A connection manager implementation to bypass setup overhead for task managers running in local
  * execution mode.
@@ -29,9 +25,8 @@ import org.apache.flink.runtime.io.network.partition.ResultPartitionProvider;
 public class LocalConnectionManager implements ConnectionManager {
 
 	@Override
-	public void start(ResultPartitionProvider partitionProvider,
-						TaskEventDispatcher taskEventDispatcher,
-						NetworkBufferPool networkbufferPool) {
+	public int start() {
+		return -1;
 	}
 
 	@Override

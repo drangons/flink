@@ -21,10 +21,9 @@ package org.apache.flink.runtime.jobmanager.scheduler;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.apache.flink.util.AbstractID;
 import org.apache.flink.runtime.jobgraph.JobVertex;
-
-import com.google.common.base.Preconditions;
+import org.apache.flink.util.AbstractID;
+import org.apache.flink.util.Preconditions;
 
 /**
  * A Co-location group is a group of JobVertices, where the <i>i-th</i> subtask of one vertex
@@ -63,6 +62,10 @@ public class CoLocationGroup implements java.io.Serializable {
 	public void addVertex(JobVertex vertex) {
 		Preconditions.checkNotNull(vertex);
 		this.vertices.add(vertex);
+	}
+
+	public List<JobVertex> getVertices() {
+		return vertices;
 	}
 	
 	public void mergeInto(CoLocationGroup other) {

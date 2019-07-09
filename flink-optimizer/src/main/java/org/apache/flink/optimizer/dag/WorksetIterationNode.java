@@ -52,6 +52,7 @@ import org.apache.flink.optimizer.plan.WorksetIterationPlanNode;
 import org.apache.flink.optimizer.plan.WorksetPlanNode;
 import org.apache.flink.optimizer.plan.PlanNode.FeedbackPropertiesMeetRequirementsReport;
 import org.apache.flink.optimizer.util.NoOpBinaryUdfOp;
+import org.apache.flink.optimizer.util.NoOpUnaryUdfOp;
 import org.apache.flink.runtime.operators.DriverStrategy;
 import org.apache.flink.runtime.operators.shipping.ShipStrategyType;
 import org.apache.flink.runtime.operators.util.LocalStrategy;
@@ -307,7 +308,8 @@ public class WorksetIterationNode extends TwoInputNode implements IterationNode 
 		this.nextWorkset.accept(InterestingPropertiesClearer.INSTANCE);
 		this.solutionSetDelta.accept(InterestingPropertiesClearer.INSTANCE);
 	}
-	
+
+	@SuppressWarnings("unchecked")
 	@Override
 	protected void instantiate(OperatorDescriptorDual operator, Channel solutionSetIn, Channel worksetIn,
 			List<Set<? extends NamedChannel>> broadcastPlanChannels, List<PlanNode> target, CostEstimator estimator,
@@ -359,7 +361,7 @@ public class WorksetIterationNode extends TwoInputNode implements IterationNode 
 																							atEndGlobal, atEndLocal);
 
 				if (report == FeedbackPropertiesMeetRequirementsReport.NO_PARTIAL_SOLUTION) {
-					; // depends only through broadcast variable on the workset solution
+					// depends only through broadcast variable on the workset solution
 				}
 				else if (report == FeedbackPropertiesMeetRequirementsReport.NOT_MET) {
 					// attach a no-op node through which we create the properties of the original input
@@ -367,9 +369,14 @@ public class WorksetIterationNode extends TwoInputNode implements IterationNode 
 					globPropsReqWorkset.parameterizeChannel(toNoOp, false,
 															nextWorksetRootConnection.getDataExchangeMode(), false);
 					locPropsReqWorkset.parameterizeChannel(toNoOp);
-					
-					UnaryOperatorNode rebuildWorksetPropertiesNode = new UnaryOperatorNode("Rebuild Workset Properties",
-																							FieldList.EMPTY_LIST);
+
+					NoOpUnaryUdfOp noOpUnaryUdfOp = new NoOpUnaryUdfOp<>();
+					noOpUnaryUdfOp.setInput(candidate.getProgramOperator());
+
+					UnaryOperatorNode rebuildWorksetPropertiesNode = new UnaryOperatorNode(
+						"Rebuild Workset Properties",
+						noOpUnaryUdfOp,
+						true);
 					
 					rebuildWorksetPropertiesNode.setParallelism(candidate.getParallelism());
 					
@@ -424,8 +431,8 @@ public class WorksetIterationNode extends TwoInputNode implements IterationNode 
 		LocalProperties lp = LocalProperties.EMPTY.addUniqueFields(this.solutionSetKeyFields);
 		
 		// take all combinations of solution set delta and workset plans
-		for (PlanNode solutionSetCandidate : solutionSetDeltaCandidates) {
-			for (PlanNode worksetCandidate : worksetCandidates) {
+		for (PlanNode worksetCandidate : worksetCandidates) {
+			for (PlanNode solutionSetCandidate : solutionSetDeltaCandidates) {
 				// check whether they have the same operator at their latest branching point
 				if (this.singleRoot.areBranchCompatible(solutionSetCandidate, worksetCandidate)) {
 					

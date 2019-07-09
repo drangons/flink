@@ -54,12 +54,9 @@ public class TestFileUtils {
 		f.getParentFile().mkdirs();
 		f.createNewFile();
 		f.deleteOnExit();
-		
-		BufferedWriter out = new BufferedWriter(new FileWriter(f));
-		try { 
+
+		try (BufferedWriter out = new BufferedWriter(new FileWriter(f))) {
 			out.write(contents);
-		} finally {
-			out.close();
 		}
 		return f.toURI().toString();
 	}
@@ -73,13 +70,10 @@ public class TestFileUtils {
 		f.createNewFile();
 		f.deleteOnExit();
 
-		BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(f));
-		try {
+		try (BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(f))) {
 			for (; bytes > 0; bytes--) {
 				out.write(0);
 			}
-		} finally {
-			out.close();
 		}
 		return f.toURI().toString();
 	}
@@ -87,20 +81,16 @@ public class TestFileUtils {
 	public static String createTempFile(String contents) throws IOException {
 		File f = File.createTempFile(FILE_PREFIX, FILE_SUFFIX);
 		f.deleteOnExit();
-		
-		BufferedWriter out = new BufferedWriter(new FileWriter(f));
-		try { 
+
+		try (BufferedWriter out = new BufferedWriter(new FileWriter(f))) {
 			out.write(contents);
-		} finally {
-			out.close();
 		}
 		return f.toURI().toString();
 	}
 	
 	// ------------------------------------------------------------------------
 
-	public static String createTempFileDir(long ... bytes) throws IOException {
-		File tempDir = new File(System.getProperty("java.io.tmpdir"));
+	public static String createTempFileDir(File tempDir, long ... bytes) throws IOException {
 		File f = null;
 		do {
 			f = new File(tempDir, randomFileName());
@@ -111,25 +101,21 @@ public class TestFileUtils {
 		for (long l : bytes) {
 			File child = new File(f, randomFileName());
 			child.deleteOnExit();
-		
-			BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(child));
-			try { 
+
+			try (BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(child))) {
 				for (; l > 0; l--) {
 					out.write(0);
 				}
-			} finally {
-				out.close();
 			}
 		}
 		return f.toURI().toString();
 	}
 	
-	public static String createTempFileDir(String ... contents) throws IOException {
-		return createTempFileDirExtension(FILE_SUFFIX, contents);
+	public static String createTempFileDir(File tempDir, String ... contents) throws IOException {
+		return createTempFileDirExtension(tempDir, FILE_SUFFIX, contents);
 	}
 	
-	public static String createTempFileDirExtension(String fileExtension, String ... contents ) throws IOException {
-		File tempDir = new File(System.getProperty("java.io.tmpdir"));
+	public static String createTempFileDirExtension(File tempDir, String fileExtension, String ... contents ) throws IOException {
 		File f = null;
 		do {
 			f = new File(tempDir, randomFileName(FILE_SUFFIX));
@@ -140,12 +126,9 @@ public class TestFileUtils {
 		for (String s : contents) {
 			File child = new File(f, randomFileName(fileExtension));
 			child.deleteOnExit();
-		
-			BufferedWriter out = new BufferedWriter(new FileWriter(child));
-			try { 
+
+			try (BufferedWriter out = new BufferedWriter(new FileWriter(child))) {
 				out.write(s);
-			} finally {
-				out.close();
 			}
 		}
 		return f.toURI().toString();

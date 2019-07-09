@@ -22,7 +22,6 @@ import org.apache.flink.api.common.aggregators.LongSumAggregator;
 import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.java.DataSet;
 import org.apache.flink.api.java.ExecutionEnvironment;
-import org.apache.flink.api.java.tuple.Tuple1;
 import org.apache.flink.graph.Edge;
 import org.apache.flink.graph.EdgeDirection;
 import org.apache.flink.graph.Graph;
@@ -35,6 +34,7 @@ import org.apache.flink.graph.gsa.Neighbor;
 import org.apache.flink.graph.gsa.SumFunction;
 import org.apache.flink.test.util.MultipleProgramsTestBase;
 import org.apache.flink.types.LongValue;
+
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -43,6 +43,9 @@ import org.junit.runners.Parameterized;
 import java.util.HashSet;
 import java.util.List;
 
+/**
+ * Tests for {@link GSAConfiguration}.
+ */
 @RunWith(Parameterized.class)
 public class GatherSumApplyConfigurationITCase extends MultipleProgramsTestBase {
 
@@ -60,7 +63,7 @@ public class GatherSumApplyConfigurationITCase extends MultipleProgramsTestBase 
 		final ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
 
 		Graph<Long, Long, Long> graph = Graph.fromCollection(TestGraphUtils.getLongLongVertices(),
-				TestGraphUtils.getLongLongEdges(), env).mapVertices(new AssignOneMapper());
+			TestGraphUtils.getLongLongEdges(), env).mapVertices(new AssignOneMapper());
 
 		// create the configuration object
 		GSAConfiguration parameters = new GSAConfiguration();
@@ -72,31 +75,30 @@ public class GatherSumApplyConfigurationITCase extends MultipleProgramsTestBase 
 		parameters.setOptNumVertices(true);
 
 		Graph<Long, Long, Long> res = graph.runGatherSumApplyIteration(new Gather(), new Sum(),
-				new Apply(), 10, parameters);
+			new Apply(), 10, parameters);
 
-        DataSet<Vertex<Long, Long>> data = res.getVertices();
-        List<Vertex<Long, Long>> result= data.collect();
+		DataSet<Vertex<Long, Long>> data = res.getVertices();
+		List<Vertex<Long, Long>> result = data.collect();
 
 		expectedResult = "1,11\n" +
-				"2,11\n" +
-				"3,11\n" +
-				"4,11\n" +
-				"5,11";
-		
+			"2,11\n" +
+			"3,11\n" +
+			"4,11\n" +
+			"5,11";
+
 		compareResultAsTuples(result, expectedResult);
 	}
 
 	@Test
 	public void testIterationConfiguration() throws Exception {
-
 		/*
 		 * Test name, parallelism and solutionSetUnmanaged parameters
 		 */
 		final ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
 
 		GatherSumApplyIteration<Long, Long, Long, Long> iteration = GatherSumApplyIteration
-				.withEdges(TestGraphUtils.getLongLongEdgeData(env), new DummyGather(),
-						new DummySum(), new DummyApply(), 10);
+			.withEdges(TestGraphUtils.getLongLongEdgeData(env), new DummyGather(),
+				new DummySum(), new DummyApply(), 10);
 
 		GSAConfiguration parameters = new GSAConfiguration();
 		parameters.setName("gelly iteration");
@@ -110,20 +112,19 @@ public class GatherSumApplyConfigurationITCase extends MultipleProgramsTestBase 
 		Assert.assertEquals(true, iteration.getIterationConfiguration().isSolutionSetUnmanagedMemory());
 
 		DataSet<Vertex<Long, Long>> data = TestGraphUtils.getLongLongVertexData(env).runOperation(iteration);
-        List<Vertex<Long, Long>> result= data.collect();
-        
+		List<Vertex<Long, Long>> result = data.collect();
+
 		expectedResult = "1,11\n" +
-				"2,12\n" +
-				"3,13\n" +
-				"4,14\n" +
-				"5,15";
-		
+			"2,12\n" +
+			"3,13\n" +
+			"4,14\n" +
+			"5,15";
+
 		compareResultAsTuples(result, expectedResult);
 	}
 
 	@Test
 	public void testIterationDefaultDirection() throws Exception {
-
 		/*
 		 * Test that if no direction parameter is given, the iteration works as before
 		 * (i.e. it gathers information from the IN edges and neighbors and the information is calculated for an OUT edge
@@ -138,27 +139,26 @@ public class GatherSumApplyConfigurationITCase extends MultipleProgramsTestBase 
 		edges.remove(0);
 
 		Graph<Long, HashSet<Long>, Long> graph = Graph
-				.fromCollection(TestGraphUtils.getLongLongVertices(), edges, env)
-				.mapVertices(new GatherSumApplyConfigurationITCase.InitialiseHashSetMapper());
+			.fromCollection(TestGraphUtils.getLongLongVertices(), edges, env)
+			.mapVertices(new GatherSumApplyConfigurationITCase.InitialiseHashSetMapper());
 
 		DataSet<Vertex<Long, HashSet<Long>>> resultedVertices = graph.runGatherSumApplyIteration(
 				new GetReachableVertices(), new FindAllReachableVertices(), new UpdateReachableVertices(), 4)
-				.getVertices();
+			.getVertices();
 
 		List<Vertex<Long, HashSet<Long>>> result = resultedVertices.collect();
 
 		expectedResult = "1,[1, 2, 3, 4, 5]\n"
-						+"2,[2]\n"
-						+"3,[1, 2, 3, 4, 5]\n"
-						+"4,[1, 2, 3, 4, 5]\n"
-						+"5,[1, 2, 3, 4, 5]\n";
+			+ "2,[2]\n"
+			+ "3,[1, 2, 3, 4, 5]\n"
+			+ "4,[1, 2, 3, 4, 5]\n"
+			+ "5,[1, 2, 3, 4, 5]\n";
 
 		compareResultAsTuples(result, expectedResult);
 	}
 
 	@Test
 	public void testIterationDirectionIN() throws Exception {
-
 		/*
 		 * Test that if the direction parameter IN is given, the iteration works as expected
 		 * (i.e. it gathers information from the OUT edges and neighbors and the information is calculated for an IN edge
@@ -176,27 +176,26 @@ public class GatherSumApplyConfigurationITCase extends MultipleProgramsTestBase 
 		edges.remove(0);
 
 		Graph<Long, HashSet<Long>, Long> graph = Graph
-				.fromCollection(TestGraphUtils.getLongLongVertices(), edges, env)
-				.mapVertices(new GatherSumApplyConfigurationITCase.InitialiseHashSetMapper());
+			.fromCollection(TestGraphUtils.getLongLongVertices(), edges, env)
+			.mapVertices(new GatherSumApplyConfigurationITCase.InitialiseHashSetMapper());
 
 		DataSet<Vertex<Long, HashSet<Long>>> resultedVertices = graph.runGatherSumApplyIteration(
 				new GetReachableVertices(), new FindAllReachableVertices(), new UpdateReachableVertices(), 4,
-																								parameters)
-				.getVertices();
+				parameters)
+			.getVertices();
 		List<Vertex<Long, HashSet<Long>>> result = resultedVertices.collect();
 
 		expectedResult = "1,[1, 3, 4, 5]\n"
-				+"2,[1, 2, 3, 4, 5]\n"
-				+"3,[1, 3, 4, 5]\n"
-				+"4,[1, 3, 4, 5]\n"
-				+"5,[1, 3, 4, 5]\n";
+			+ "2,[1, 2, 3, 4, 5]\n"
+			+ "3,[1, 3, 4, 5]\n"
+			+ "4,[1, 3, 4, 5]\n"
+			+ "5,[1, 3, 4, 5]\n";
 
 		compareResultAsTuples(result, expectedResult);
 	}
 
 	@Test
 	public void testIterationDirectionALL() throws Exception {
-
 		/*
 		 * Test that if the direction parameter OUT is given, the iteration works as expected
 		 * (i.e. it gathers information from both IN and OUT edges and neighbors
@@ -213,21 +212,21 @@ public class GatherSumApplyConfigurationITCase extends MultipleProgramsTestBase 
 		edges.remove(0);
 
 		Graph<Long, HashSet<Long>, Long> graph = Graph
-				.fromCollection(TestGraphUtils.getLongLongVertices(), edges, env)
-				.mapVertices(new GatherSumApplyConfigurationITCase.InitialiseHashSetMapper());
+			.fromCollection(TestGraphUtils.getLongLongVertices(), edges, env)
+			.mapVertices(new GatherSumApplyConfigurationITCase.InitialiseHashSetMapper());
 
 		DataSet<Vertex<Long, HashSet<Long>>> resultedVertices = graph.runGatherSumApplyIteration(
 				new GetReachableVertices(), new FindAllReachableVertices(), new UpdateReachableVertices(), 4,
 				parameters)
-				.getVertices();
+			.getVertices();
 
 		List<Vertex<Long, HashSet<Long>>> result = resultedVertices.collect();
 
 		expectedResult = "1,[1, 2, 3, 4, 5]\n"
-				+"2,[1, 2, 3, 4, 5]\n"
-				+"3,[1, 2, 3, 4, 5]\n"
-				+"4,[1, 2, 3, 4, 5]\n"
-				+"5,[1, 2, 3, 4, 5]\n";
+			+ "2,[1, 2, 3, 4, 5]\n"
+			+ "3,[1, 2, 3, 4, 5]\n"
+			+ "4,[1, 2, 3, 4, 5]\n"
+			+ "5,[1, 2, 3, 4, 5]\n";
 
 		compareResultAsTuples(result, expectedResult);
 	}
@@ -240,14 +239,14 @@ public class GatherSumApplyConfigurationITCase extends MultipleProgramsTestBase 
 
 			// test bcast variable
 			@SuppressWarnings("unchecked")
-			List<Tuple1<Integer>> bcastSet = (List<Tuple1<Integer>>)(List<?>)getBroadcastSet("gatherBcastSet");
-			Assert.assertEquals(1, bcastSet.get(0));
-			Assert.assertEquals(2, bcastSet.get(1));
-			Assert.assertEquals(3, bcastSet.get(2));
+			List<Integer> bcastSet = (List<Integer>) (List<?>) getBroadcastSet("gatherBcastSet");
+			Assert.assertEquals(1, bcastSet.get(0).intValue());
+			Assert.assertEquals(2, bcastSet.get(1).intValue());
+			Assert.assertEquals(3, bcastSet.get(2).intValue());
 
 			// test aggregator
 			if (getSuperstepNumber() == 2) {
-				long aggrValue = ((LongValue)getPreviousIterationAggregate("superstepAggregator")).getValue();
+				long aggrValue = ((LongValue) getPreviousIterationAggregate("superstepAggregator")).getValue();
 
 				Assert.assertEquals(7, aggrValue);
 			}
@@ -271,10 +270,10 @@ public class GatherSumApplyConfigurationITCase extends MultipleProgramsTestBase 
 
 			// test bcast variable
 			@SuppressWarnings("unchecked")
-			List<Tuple1<Integer>> bcastSet = (List<Tuple1<Integer>>)(List<?>)getBroadcastSet("sumBcastSet");
-			Assert.assertEquals(4, bcastSet.get(0));
-			Assert.assertEquals(5, bcastSet.get(1));
-			Assert.assertEquals(6, bcastSet.get(2));
+			List<Integer> bcastSet = (List<Integer>) (List<?>) getBroadcastSet("sumBcastSet");
+			Assert.assertEquals(4, bcastSet.get(0).intValue());
+			Assert.assertEquals(5, bcastSet.get(1).intValue());
+			Assert.assertEquals(6, bcastSet.get(2).intValue());
 
 			// test aggregator
 			aggregator = getIterationAggregator("superstepAggregator");
@@ -286,7 +285,7 @@ public class GatherSumApplyConfigurationITCase extends MultipleProgramsTestBase 
 		public Long sum(Long newValue, Long currentValue) {
 			long superstep = getSuperstepNumber();
 			aggregator.aggregate(superstep);
-			return 0l;
+			return 0L;
 		}
 	}
 
@@ -300,10 +299,10 @@ public class GatherSumApplyConfigurationITCase extends MultipleProgramsTestBase 
 
 			// test bcast variable
 			@SuppressWarnings("unchecked")
-			List<Tuple1<Integer>> bcastSet = (List<Tuple1<Integer>>)(List<?>)getBroadcastSet("applyBcastSet");
-			Assert.assertEquals(7, bcastSet.get(0));
-			Assert.assertEquals(8, bcastSet.get(1));
-			Assert.assertEquals(9, bcastSet.get(2));
+			List<Integer> bcastSet = (List<Integer>) (List<?>) getBroadcastSet("applyBcastSet");
+			Assert.assertEquals(7, bcastSet.get(0).intValue());
+			Assert.assertEquals(8, bcastSet.get(1).intValue());
+			Assert.assertEquals(9, bcastSet.get(2).intValue());
 
 			// test aggregator
 			aggregator = getIterationAggregator("superstepAggregator");
@@ -338,7 +337,7 @@ public class GatherSumApplyConfigurationITCase extends MultipleProgramsTestBase 
 	private static final class DummySum extends SumFunction<Long, Long, Long> {
 
 		public Long sum(Long newValue, Long currentValue) {
-			return 0l;
+			return 0L;
 		}
 	}
 
@@ -351,19 +350,19 @@ public class GatherSumApplyConfigurationITCase extends MultipleProgramsTestBase 
 	}
 
 	@SuppressWarnings("serial")
-	public static final class AssignOneMapper implements MapFunction<Vertex<Long, Long>, Long> {
+	private static final class AssignOneMapper implements MapFunction<Vertex<Long, Long>, Long> {
 
 		public Long map(Vertex<Long, Long> value) {
-			return 1l;
+			return 1L;
 		}
 	}
 
 	@SuppressWarnings("serial")
-	public static final class InitialiseHashSetMapper implements MapFunction<Vertex<Long, Long>, HashSet<Long>> {
+	private static final class InitialiseHashSetMapper implements MapFunction<Vertex<Long, Long>, HashSet<Long>> {
 
 		@Override
 		public HashSet<Long> map(Vertex<Long, Long> value) throws Exception {
-			HashSet<Long> h = new HashSet<Long>();
+			HashSet<Long> h = new HashSet<>();
 			h.add(value.getId());
 			return h;
 		}
@@ -382,7 +381,7 @@ public class GatherSumApplyConfigurationITCase extends MultipleProgramsTestBase 
 	private static final class FindAllReachableVertices extends SumFunction<HashSet<Long>, Long, HashSet<Long>> {
 		@Override
 		public HashSet<Long> sum(HashSet<Long> newSet, HashSet<Long> currentSet) {
-			for(Long l : newSet) {
+			for (Long l : newSet) {
 				currentSet.add(l);
 			}
 			return currentSet;
@@ -395,7 +394,7 @@ public class GatherSumApplyConfigurationITCase extends MultipleProgramsTestBase 
 		@Override
 		public void apply(HashSet<Long> newValue, HashSet<Long> currentValue) {
 			newValue.addAll(currentValue);
-			if(newValue.size()>currentValue.size()) {
+			if (newValue.size() > currentValue.size()) {
 				setResult(newValue);
 			}
 		}

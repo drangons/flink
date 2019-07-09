@@ -18,13 +18,16 @@
 
 package org.apache.flink.streaming.runtime.streamrecord;
 
+import org.apache.flink.annotation.Internal;
 import org.apache.flink.streaming.api.watermark.Watermark;
+import org.apache.flink.streaming.runtime.streamstatus.StreamStatus;
 
 /**
  * An element in a data stream. Can be a record or a Watermark.
  */
+@Internal
 public abstract class StreamElement {
-	
+
 	/**
 	 * Checks whether this element is a watermark.
 	 * @return True, if this element is a watermark, false otherwise.
@@ -34,11 +37,27 @@ public abstract class StreamElement {
 	}
 
 	/**
+	 * Checks whether this element is a stream status.
+	 * @return True, if this element is a stream status, false otherwise.
+	 */
+	public final boolean isStreamStatus() {
+		return getClass() == StreamStatus.class;
+	}
+
+	/**
 	 * Checks whether this element is a record.
 	 * @return True, if this element is a record, false otherwise.
 	 */
 	public final boolean isRecord() {
 		return getClass() == StreamRecord.class;
+	}
+
+	/**
+	 * Checks whether this element is a latency marker.
+	 * @return True, if this element is a latency marker, false otherwise.
+	 */
+	public final boolean isLatencyMarker() {
+		return getClass() == LatencyMarker.class;
 	}
 
 	/**
@@ -58,5 +77,23 @@ public abstract class StreamElement {
 	 */
 	public final Watermark asWatermark() {
 		return (Watermark) this;
+	}
+
+	/**
+	 * Casts this element into a StreamStatus.
+	 * @return This element as a StreamStatus.
+	 * @throws java.lang.ClassCastException Thrown, if this element is actually not a Stream Status.
+	 */
+	public final StreamStatus asStreamStatus() {
+		return (StreamStatus) this;
+	}
+
+	/**
+	 * Casts this element into a LatencyMarker.
+	 * @return This element as a LatencyMarker.
+	 * @throws java.lang.ClassCastException Thrown, if this element is actually not a LatencyMarker.
+	 */
+	public final LatencyMarker asLatencyMarker() {
+		return (LatencyMarker) this;
 	}
 }

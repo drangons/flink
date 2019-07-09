@@ -15,11 +15,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.api.java.functions;
 
+import org.apache.flink.annotation.Internal;
 import org.apache.flink.api.common.functions.GroupReduceFunction;
-import org.apache.flink.api.java.sampling.IntermediateSampleData;
 import org.apache.flink.api.java.sampling.DistributedRandomSampler;
+import org.apache.flink.api.java.sampling.IntermediateSampleData;
 import org.apache.flink.api.java.sampling.ReservoirSamplerWithReplacement;
 import org.apache.flink.api.java.sampling.ReservoirSamplerWithoutReplacement;
 import org.apache.flink.util.Collector;
@@ -35,6 +37,7 @@ import java.util.Iterator;
  *
  * @param <T> the data type wrapped in ElementWithRandom as input.
  */
+@Internal
 public class SampleInCoordinator<T> implements GroupReduceFunction<IntermediateSampleData<T>, T> {
 
 	private boolean withReplacement;

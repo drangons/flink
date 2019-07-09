@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,10 +15,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.streaming.api.transformations;
 
+import org.apache.flink.annotation.Internal;
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.api.dag.Transformation;
 import org.apache.flink.streaming.api.operators.ChainingStrategy;
+import org.apache.flink.streaming.api.operators.SimpleOperatorFactory;
+import org.apache.flink.streaming.api.operators.StreamOperatorFactory;
 import org.apache.flink.streaming.api.operators.StreamSource;
 
 import java.util.Collection;
@@ -26,13 +32,14 @@ import java.util.Collections;
 
 /**
  * This represents a Source. This does not actually transform anything since it has no inputs but
- * it is the root {@code StreamTransformation} of any topology.
+ * it is the root {@code Transformation} of any topology.
  *
  * @param <T> The type of the elements that this source produces
  */
-public class SourceTransformation<T> extends StreamTransformation<T> {
+@Internal
+public class SourceTransformation<T> extends PhysicalTransformation<T> {
 
-	private final StreamSource<T> operator;
+	private final StreamOperatorFactory<T> operatorFactory;
 
 	/**
 	 * Creates a new {@code SourceTransformation} from the given operator.
@@ -44,27 +51,40 @@ public class SourceTransformation<T> extends StreamTransformation<T> {
 	 */
 	public SourceTransformation(
 			String name,
-			StreamSource<T> operator,
+			StreamSource<T, ?> operator,
+			TypeInformation<T> outputType,
+			int parallelism) {
+		this(name, SimpleOperatorFactory.of(operator), outputType, parallelism);
+	}
+
+	public SourceTransformation(
+			String name,
+			StreamOperatorFactory<T> operatorFactory,
 			TypeInformation<T> outputType,
 			int parallelism) {
 		super(name, outputType, parallelism);
-		this.operator = operator;
+		this.operatorFactory = operatorFactory;
+	}
+
+	@VisibleForTesting
+	public StreamSource<T, ?> getOperator() {
+		return (StreamSource<T, ?>) ((SimpleOperatorFactory) operatorFactory).getOperator();
 	}
 
 	/**
-	 * Returns the {@code StreamSource}, the operator of this {@code SourceTransformation}.
+	 * Returns the {@code StreamOperatorFactory} of this {@code SourceTransformation}.
 	 */
-	public StreamSource<T> getOperator() {
-		return operator;
+	public StreamOperatorFactory<T> getOperatorFactory() {
+		return operatorFactory;
 	}
 
 	@Override
-	public Collection<StreamTransformation<?>> getTransitivePredecessors() {
-		return Collections.<StreamTransformation<?>>singleton(this);
+	public Collection<Transformation<?>> getTransitivePredecessors() {
+		return Collections.singleton(this);
 	}
 
 	@Override
 	public final void setChainingStrategy(ChainingStrategy strategy) {
-		operator.setChainingStrategy(strategy);
+		operatorFactory.setChainingStrategy(strategy);
 	}
 }

@@ -18,57 +18,139 @@
 
 package org.apache.flink.runtime.instance;
 
-import org.apache.flink.runtime.executiongraph.Execution;
-import org.apache.flink.api.common.JobID;
+import org.apache.flink.runtime.clusterframework.types.AllocationID;
 import org.apache.flink.runtime.jobmanager.scheduler.Locality;
+import org.apache.flink.runtime.jobmanager.slots.TaskManagerGateway;
+import org.apache.flink.runtime.jobmaster.LogicalSlot;
+import org.apache.flink.runtime.jobmaster.SlotContext;
+import org.apache.flink.runtime.jobmaster.SlotOwner;
+import org.apache.flink.runtime.jobmaster.SlotRequestId;
+import org.apache.flink.runtime.taskmanager.TaskManagerLocation;
 import org.apache.flink.util.AbstractID;
+import org.apache.flink.util.FlinkException;
+import org.apache.flink.util.Preconditions;
 
+import javax.annotation.Nullable;
+
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
 /**
  * A SimpleSlot represents a single slot on a TaskManager instance, or a slot within a shared slot.
  *
  * <p>If this slot is part of a {@link SharedSlot}, then the parent attribute will point to that shared slot.
- * If not, then the parent attribute is null.</p>
+ * If not, then the parent attribute is null.
  */
-public class SimpleSlot extends Slot {
+public class SimpleSlot extends Slot implements LogicalSlot {
 
-	/** The updater used to atomically swap in the execution */
-	private static final AtomicReferenceFieldUpdater<SimpleSlot, Execution> VERTEX_UPDATER =
-			AtomicReferenceFieldUpdater.newUpdater(SimpleSlot.class, Execution.class, "executedTask");
+	/** The updater used to atomically swap in the payload */
+	private static final AtomicReferenceFieldUpdater<SimpleSlot, Payload> PAYLOAD_UPDATER =
+			AtomicReferenceFieldUpdater.newUpdater(SimpleSlot.class, Payload.class, "payload");
 
 	// ------------------------------------------------------------------------
 
-	/** Task being executed in the slot. Volatile to force a memory barrier and allow for correct double-checking */
-	private volatile Execution executedTask;
+	private final CompletableFuture<?> releaseFuture = new CompletableFuture<>();
+
+	/** Id of the task being executed in the slot. Volatile to force a memory barrier and allow for correct double-checking */
+	private volatile Payload payload;
 
 	/** The locality attached to the slot, defining whether the slot was allocated at the desired location. */
-	private Locality locality = Locality.UNCONSTRAINED;
+	private volatile Locality locality = Locality.UNCONSTRAINED;
 
+	// ------------------------------------------------------------------------
+	//  Old Constructors (legacy mode)
+	// ------------------------------------------------------------------------
 
 	/**
 	 * Creates a new simple slot that stands alone and does not belong to shared slot.
 	 * 
-	 * @param jobID The ID of the job that the slot is allocated for.
-	 * @param instance The instance that the slot belongs to.
+	 * @param owner The component from which this slot is allocated.
+	 * @param location The location info of the TaskManager where the slot was allocated from
 	 * @param slotNumber The number of the task slot on the instance.
+	 * @param taskManagerGateway The gateway to communicate with the TaskManager of this slot
 	 */
-	public SimpleSlot(JobID jobID, Instance instance, int slotNumber) {
-		super(jobID, instance, slotNumber, null, null);
+	public SimpleSlot(
+		SlotOwner owner, TaskManagerLocation location, int slotNumber,
+		TaskManagerGateway taskManagerGateway) {
+		this(owner, location, slotNumber, taskManagerGateway, null, null);
+	}
+
+	/**
+	 * Creates a new simple slot that belongs to the given shared slot and
+	 * is identified by the given ID.
+	 *
+	 * @param owner The component from which this slot is allocated.
+	 * @param location The location info of the TaskManager where the slot was allocated from
+	 * @param slotNumber The number of the simple slot in its parent shared slot.
+	 * @param taskManagerGateway to communicate with the associated task manager.
+	 * @param parent The parent shared slot.
+	 * @param groupID The ID that identifies the group that the slot belongs to.
+	 */
+	public SimpleSlot(
+			SlotOwner owner,
+			TaskManagerLocation location,
+			int slotNumber,
+			TaskManagerGateway taskManagerGateway,
+			@Nullable SharedSlot parent,
+			@Nullable AbstractID groupID) {
+
+		super(
+			parent != null ?
+				parent.getSlotContext() :
+				new SimpleSlotContext(
+					NO_ALLOCATION_ID,
+					location,
+					slotNumber,
+					taskManagerGateway),
+			owner,
+			slotNumber,
+			parent,
+			groupID);
+	}
+
+	// ------------------------------------------------------------------------
+	//  Constructors
+	// ------------------------------------------------------------------------
+
+	/**
+	 * Creates a new simple slot that stands alone and does not belong to shared slot.
+	 *
+	 * @param slotContext The slot context of this simple slot
+	 * @param owner The component from which this slot is allocated.
+	 */
+	public SimpleSlot(SlotContext slotContext, SlotOwner owner, int slotNumber) {
+		this(slotContext, owner, slotNumber, null, null);
 	}
 
 	/**
 	 * Creates a new simple slot that belongs to the given shared slot and
 	 * is identified by the given ID..
 	 *
-	 * @param jobID The ID of the job that the slot is allocated for.
-	 * @param instance The instance that the slot belongs to.
+	 * @param parent The parent shared slot.
+	 * @param owner The component from which this slot is allocated.
+	 * @param groupID The ID that identifies the group that the slot belongs to.
+	 */
+	public SimpleSlot(SharedSlot parent, SlotOwner owner, int slotNumber, AbstractID groupID) {
+		this(parent.getSlotContext(), owner, slotNumber, parent, groupID);
+	}
+	
+	/**
+	 * Creates a new simple slot that belongs to the given shared slot and
+	 * is identified by the given ID..
+	 *
+	 * @param slotContext The slot context of this simple slot
+	 * @param owner The component from which this slot is allocated.
 	 * @param slotNumber The number of the simple slot in its parent shared slot.
 	 * @param parent The parent shared slot.
 	 * @param groupID The ID that identifies the group that the slot belongs to.
 	 */
-	public SimpleSlot(JobID jobID, Instance instance, int slotNumber, SharedSlot parent, AbstractID groupID) {
-		super(jobID, instance, slotNumber, parent, groupID);
+	private SimpleSlot(
+			SlotContext slotContext,
+			SlotOwner owner,
+			int slotNumber,
+			@Nullable SharedSlot parent,
+			@Nullable AbstractID groupID) {
+		super(slotContext, owner, slotNumber, parent, groupID);
 	}
 
 	// ------------------------------------------------------------------------
@@ -81,25 +163,14 @@ public class SimpleSlot extends Slot {
 	}
 
 	/**
-	 * Gets the task execution attempt currently executed in this slot. This may return null, if no
-	 * task execution attempt has been placed into this slot.
-	 *
-	 * @return The slot's task execution attempt, or null, if no task is executed in this slot, yet.
-	 */
-	public Execution getExecutedVertex() {
-		return executedTask;
-	}
-
-	/**
 	 * Atomically sets the executed vertex, if no vertex has been assigned to this slot so far.
 	 *
-	 * @param executedVertex The vertex to assign to this slot.
+	 * @param payload The vertex to assign to this slot.
 	 * @return True, if the vertex was assigned, false, otherwise.
 	 */
-	public boolean setExecutedVertex(Execution executedVertex) {
-		if (executedVertex == null) {
-			throw new NullPointerException();
-		}
+	@Override
+	public boolean tryAssignPayload(Payload payload) {
+		Preconditions.checkNotNull(payload);
 
 		// check that we can actually run in this slot
 		if (isCanceled()) {
@@ -107,17 +178,23 @@ public class SimpleSlot extends Slot {
 		}
 
 		// atomically assign the vertex
-		if (!VERTEX_UPDATER.compareAndSet(this, null, executedVertex)) {
+		if (!PAYLOAD_UPDATER.compareAndSet(this, null, payload)) {
 			return false;
 		}
 
 		// we need to do a double check that we were not cancelled in the meantime
 		if (isCanceled()) {
-			this.executedTask = null;
+			this.payload = null;
 			return false;
 		}
 
 		return true;
+	}
+
+	@Nullable
+	@Override
+	public Payload getPayload() {
+		return payload;
 	}
 
 	/**
@@ -141,30 +218,65 @@ public class SimpleSlot extends Slot {
 	// ------------------------------------------------------------------------
 
 	@Override
-	public void releaseSlot() {
-
+	public CompletableFuture<?> releaseSlot(@Nullable Throwable cause) {
 		if (!isCanceled()) {
+			final CompletableFuture<?> terminationFuture;
 
-			// kill all tasks currently running in this slot
-			Execution exec = this.executedTask;
-			if (exec != null && !exec.isFinished()) {
-				exec.fail(new Exception(
-						"The slot in which the task was executed has been released. Probably loss of TaskManager "
-								+ getInstance()));
-			}
+			if (payload != null) {
+				// trigger the failure of the slot payload
+				payload.fail(cause != null ? cause : new FlinkException("TaskManager was lost/killed: " + getTaskManagerLocation()));
 
-			// release directly (if we are directly allocated),
-			// otherwise release through the parent shared slot
-			if (getParent() == null) {
-				// we have to give back the slot to the owning instance
-				if (markCancelled()) {
-					getInstance().returnAllocatedSlot(this);
-				}
+				// wait for the termination of the payload before releasing the slot
+				terminationFuture = payload.getTerminalStateFuture();
 			} else {
-				// we have to ask our parent to dispose us
-				getParent().releaseChild(this);
+				terminationFuture = CompletableFuture.completedFuture(null);
 			}
+
+			terminationFuture.whenComplete(
+				(Object ignored, Throwable throwable) -> {
+					// release directly (if we are directly allocated),
+					// otherwise release through the parent shared slot
+					if (getParent() == null) {
+						// we have to give back the slot to the owning instance
+						if (markCancelled()) {
+							try {
+								getOwner().returnLogicalSlot(this);
+								releaseFuture.complete(null);
+							} catch (Exception e) {
+								releaseFuture.completeExceptionally(e);
+							}
+						}
+					} else {
+						// we have to ask our parent to dispose us
+						getParent().releaseChild(this);
+
+						releaseFuture.complete(null);
+					}
+				});
 		}
+
+		return releaseFuture;
+	}
+
+	@Override
+	public int getPhysicalSlotNumber() {
+		return getRootSlotNumber();
+	}
+
+	@Override
+	public AllocationID getAllocationId() {
+		return getSlotContext().getAllocationId();
+	}
+
+	@Override
+	public SlotRequestId getSlotRequestId() {
+		return NO_SLOT_REQUEST_ID;
+	}
+
+	@Nullable
+	@Override
+	public SlotSharingGroupId getSlotSharingGroupId() {
+		return NO_SLOT_SHARING_GROUP_ID;
 	}
 
 	// ------------------------------------------------------------------------

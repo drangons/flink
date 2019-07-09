@@ -17,14 +17,20 @@
 
 package org.apache.flink.streaming.api.environment;
 
+import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.api.common.JobExecutionResult;
 import org.apache.flink.api.java.ExecutionEnvironment;
 import org.apache.flink.client.program.OptimizerPlanEnvironment;
 import org.apache.flink.client.program.PreviewPlanEnvironment;
-import org.apache.flink.configuration.ConfigConstants;
+import org.apache.flink.configuration.CoreOptions;
 import org.apache.flink.configuration.GlobalConfiguration;
 import org.apache.flink.streaming.api.graph.StreamGraph;
 
+/**
+ * A special {@link StreamExecutionEnvironment} that is used in the web frontend when generating
+ * a user-inspectable graph of a streaming job.
+ */
+@PublicEvolving
 public class StreamPlanEnvironment extends StreamExecutionEnvironment {
 
 	private ExecutionEnvironment env;
@@ -38,9 +44,7 @@ public class StreamPlanEnvironment extends StreamExecutionEnvironment {
 			setParallelism(parallelism);
 		} else {
 			// determine parallelism
-			setParallelism(GlobalConfiguration.getInteger(
-					ConfigConstants.DEFAULT_PARALLELISM_KEY,
-					ConfigConstants.DEFAULT_PARALLELISM));
+			setParallelism(GlobalConfiguration.loadConfiguration().getInteger(CoreOptions.DEFAULT_PARALLELISM));
 		}
 	}
 
@@ -50,11 +54,7 @@ public class StreamPlanEnvironment extends StreamExecutionEnvironment {
 	}
 
 	@Override
-	public JobExecutionResult execute(String jobName) throws Exception {
-
-		StreamGraph streamGraph = getStreamGraph();
-		streamGraph.setJobName(jobName);
-
+	public JobExecutionResult execute(StreamGraph streamGraph) throws Exception {
 		transformations.clear();
 
 		if (env instanceof OptimizerPlanEnvironment) {

@@ -47,15 +47,15 @@ public class TestingListener implements LeaderRetrievalListener {
 		return leaderSessionID;
 	}
 
-	public void waitForNewLeader(long timeout) throws Exception {
+	public String waitForNewLeader(long timeout) throws Exception {
 		long start = System.currentTimeMillis();
 		long curTimeout;
 
-		while (
+		synchronized (lock) {
+			while (
 				exception == null &&
-				(address == null || address.equals(oldAddress)) &&
-				(curTimeout = timeout - System.currentTimeMillis() + start) > 0) {
-			synchronized (lock) {
+					(address == null || address.equals(oldAddress)) &&
+					(curTimeout = timeout - System.currentTimeMillis() + start) > 0) {
 				try {
 					lock.wait(curTimeout);
 				} catch (InterruptedException e) {
@@ -72,6 +72,8 @@ public class TestingListener implements LeaderRetrievalListener {
 		}
 
 		oldAddress = address;
+
+		return address;
 	}
 
 	@Override

@@ -20,6 +20,9 @@ package org.apache.flink.api.common.typeutils.base.array;
 
 import java.io.IOException;
 
+import org.apache.flink.annotation.Internal;
+import org.apache.flink.api.common.typeutils.SimpleTypeSerializerSnapshot;
+import org.apache.flink.api.common.typeutils.TypeSerializerSnapshot;
 import org.apache.flink.api.common.typeutils.base.TypeSerializerSingleton;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
@@ -27,6 +30,7 @@ import org.apache.flink.core.memory.DataOutputView;
 /**
  * A serializer for boolean arrays.
  */
+@Internal
 public final class BooleanPrimitiveArraySerializer extends TypeSerializerSingleton<boolean[]>{
 
 	private static final long serialVersionUID = 1L;
@@ -34,8 +38,7 @@ public final class BooleanPrimitiveArraySerializer extends TypeSerializerSinglet
 	private static final boolean[] EMPTY = new boolean[0];
 
 	public static final BooleanPrimitiveArraySerializer INSTANCE = new BooleanPrimitiveArraySerializer();
-	
-	
+
 	@Override
 	public boolean isImmutableType() {
 		return false;
@@ -103,7 +106,20 @@ public final class BooleanPrimitiveArraySerializer extends TypeSerializerSinglet
 	}
 
 	@Override
-	public boolean canEqual(Object obj) {
-		return obj instanceof BooleanPrimitiveArraySerializer;
+	public TypeSerializerSnapshot<boolean[]> snapshotConfiguration() {
+		return new BooleanPrimitiveArraySerializerSnapshot();
+	}
+
+	// ------------------------------------------------------------------------
+
+	/**
+	 * Serializer configuration snapshot for compatibility and format evolution.
+	 */
+	@SuppressWarnings("WeakerAccess")
+	public static final class BooleanPrimitiveArraySerializerSnapshot extends SimpleTypeSerializerSnapshot<boolean[]> {
+
+		public BooleanPrimitiveArraySerializerSnapshot() {
+			super(() -> INSTANCE);
+		}
 	}
 }

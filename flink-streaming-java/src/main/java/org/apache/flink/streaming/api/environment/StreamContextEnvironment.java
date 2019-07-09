@@ -17,17 +17,21 @@
 
 package org.apache.flink.streaming.api.environment;
 
-import com.google.common.base.Preconditions;
+import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.api.common.JobExecutionResult;
 import org.apache.flink.client.program.ContextEnvironment;
 import org.apache.flink.client.program.DetachedEnvironment;
-
-import org.apache.flink.configuration.ConfigConstants;
-import org.apache.flink.configuration.GlobalConfiguration;
 import org.apache.flink.streaming.api.graph.StreamGraph;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/**
+ * Special {@link StreamExecutionEnvironment} that will be used in cases where the CLI client or
+ * testing utilities create a {@link StreamExecutionEnvironment} that should be used when
+ * {@link StreamExecutionEnvironment#getExecutionEnvironment()} is called.
+ */
+@PublicEvolving
 public class StreamContextEnvironment extends StreamExecutionEnvironment {
 
 	private static final Logger LOG = LoggerFactory.getLogger(StreamContextEnvironment.class);
@@ -38,20 +42,11 @@ public class StreamContextEnvironment extends StreamExecutionEnvironment {
 		this.ctx = ctx;
 		if (ctx.getParallelism() > 0) {
 			setParallelism(ctx.getParallelism());
-		} else {
-			setParallelism(GlobalConfiguration.getInteger(
-					ConfigConstants.DEFAULT_PARALLELISM_KEY,
-					ConfigConstants.DEFAULT_PARALLELISM));
 		}
 	}
 
 	@Override
-	public JobExecutionResult execute(String jobName) throws Exception {
-		Preconditions.checkNotNull("Streaming Job name should not be null.");
-
-		StreamGraph streamGraph = this.getStreamGraph();
-		streamGraph.setJobName(jobName);
-
+	public JobExecutionResult execute(StreamGraph streamGraph) throws Exception {
 		transformations.clear();
 
 		// execute the programs
@@ -60,7 +55,10 @@ public class StreamContextEnvironment extends StreamExecutionEnvironment {
 			((DetachedEnvironment) ctx).setDetachedPlan(streamGraph);
 			return DetachedEnvironment.DetachedJobExecutionResult.INSTANCE;
 		} else {
-			return ctx.getClient().runBlocking(streamGraph, ctx.getJars(), ctx.getClasspaths(), ctx.getUserCodeClassLoader());
+			return ctx
+				.getClient()
+				.run(streamGraph, ctx.getJars(), ctx.getClasspaths(), ctx.getUserCodeClassLoader(), ctx.getSavepointRestoreSettings())
+				.getJobExecutionResult();
 		}
 	}
 }

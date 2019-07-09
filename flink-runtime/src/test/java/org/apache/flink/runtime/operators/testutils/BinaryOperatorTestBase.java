@@ -30,12 +30,15 @@ import org.apache.flink.runtime.io.disk.iomanager.IOManager;
 import org.apache.flink.runtime.io.disk.iomanager.IOManagerAsync;
 import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
 import org.apache.flink.runtime.memory.MemoryManager;
+import org.apache.flink.runtime.metrics.groups.OperatorMetricGroup;
+import org.apache.flink.runtime.metrics.groups.UnregisteredMetricGroups;
 import org.apache.flink.runtime.operators.Driver;
-import org.apache.flink.runtime.operators.TaskContext;
 import org.apache.flink.runtime.operators.ResettableDriver;
+import org.apache.flink.runtime.operators.TaskContext;
 import org.apache.flink.runtime.operators.sort.UnilateralSortMerger;
 import org.apache.flink.runtime.operators.util.TaskConfig;
 import org.apache.flink.runtime.taskmanager.TaskManagerRuntimeInfo;
+import org.apache.flink.runtime.util.TestingTaskManagerRuntimeInfo;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.MutableObjectIterator;
 import org.apache.flink.util.TestLogger;
@@ -51,7 +54,7 @@ import java.util.LinkedList;
 import java.util.List;
 
 @RunWith(Parameterized.class)
-public class BinaryOperatorTestBase<S extends Function, IN, OUT> extends TestLogger implements TaskContext<S, OUT> {
+public abstract class BinaryOperatorTestBase<S extends Function, IN, OUT> extends TestLogger implements TaskContext<S, OUT> {
 	
 	protected static final int PAGE_SIZE = 32 * 1024;
 	
@@ -108,7 +111,7 @@ public class BinaryOperatorTestBase<S extends Function, IN, OUT> extends TestLog
 		this.owner = new DummyInvokable();
 		this.taskConfig = new TaskConfig(new Configuration());
 		this.executionConfig = executionConfig;
-		this.taskManageInfo = new TaskManagerRuntimeInfo("localhost", new Configuration());
+		this.taskManageInfo = new TestingTaskManagerRuntimeInfo();
 	}
 	
 	@Parameterized.Parameters
@@ -148,6 +151,7 @@ public class BinaryOperatorTestBase<S extends Function, IN, OUT> extends TestLog
 				this.perSortFractionMem,
 				32,
 				0.8f,
+				true /*use large record handler*/,
 				false
 		);
 		this.sorters.add(sorter);
@@ -357,7 +361,7 @@ public class BinaryOperatorTestBase<S extends Function, IN, OUT> extends TestLog
 	}
 	
 	@Override
-	public AbstractInvokable getOwningNepheleTask() {
+	public AbstractInvokable getContainingTask() {
 		return this.owner;
 	}
 	
@@ -366,6 +370,11 @@ public class BinaryOperatorTestBase<S extends Function, IN, OUT> extends TestLog
 		return "Driver Tester: " + message;
 	}
 	
+	@Override
+	public OperatorMetricGroup getMetricGroup() {
+		return UnregisteredMetricGroups.createUnregisteredOperatorMetricGroup();
+	}
+
 	// --------------------------------------------------------------------------------------------
 	
 	@After
@@ -379,9 +388,8 @@ public class BinaryOperatorTestBase<S extends Function, IN, OUT> extends TestLog
 		this.sorters.clear();
 		
 		// 2nd, shutdown I/O
-		this.ioManager.shutdown();
-		Assert.assertTrue("I/O Manager has not properly shut down.", this.ioManager.isProperlyShutDown());
-		
+		this.ioManager.close();
+
 		// last, verify all memory is returned and shutdown mem manager
 		MemoryManager memMan = getMemoryManager();
 		if (memMan != null) {

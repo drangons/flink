@@ -18,9 +18,12 @@
 
 package org.apache.flink.core.io;
 
+import org.apache.flink.annotation.Public;
+
 /**
  * A generic input split that has only a partition number.
  */
+@Public
 public class GenericInputSplit implements InputSplit, java.io.Serializable {
 
 	private static final long serialVersionUID = 1L;
@@ -64,7 +67,7 @@ public class GenericInputSplit implements InputSplit, java.io.Serializable {
 	
 	@Override
 	public boolean equals(Object obj) {
-		if (obj != null && obj instanceof GenericInputSplit) {
+		if (obj instanceof GenericInputSplit) {
 			GenericInputSplit other = (GenericInputSplit) obj;
 			return this.partitionNumber == other.partitionNumber &&
 					this.totalNumberOfPartitions == other.totalNumberOfPartitions;

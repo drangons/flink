@@ -18,24 +18,28 @@
 
 package org.apache.flink.runtime.io.network.netty;
 
-import io.netty.bootstrap.Bootstrap;
-import io.netty.buffer.PooledByteBufAllocator;
-import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelInitializer;
-import io.netty.channel.ChannelOption;
-import io.netty.channel.epoll.Epoll;
-import io.netty.channel.epoll.EpollEventLoopGroup;
-import io.netty.channel.epoll.EpollSocketChannel;
-import io.netty.channel.nio.NioEventLoopGroup;
-import io.netty.channel.socket.SocketChannel;
-import io.netty.channel.socket.nio.NioSocketChannel;
+import org.apache.flink.shaded.netty4.io.netty.bootstrap.Bootstrap;
+import org.apache.flink.shaded.netty4.io.netty.channel.ChannelException;
+import org.apache.flink.shaded.netty4.io.netty.channel.ChannelFuture;
+import org.apache.flink.shaded.netty4.io.netty.channel.ChannelInitializer;
+import org.apache.flink.shaded.netty4.io.netty.channel.ChannelOption;
+import org.apache.flink.shaded.netty4.io.netty.channel.epoll.Epoll;
+import org.apache.flink.shaded.netty4.io.netty.channel.epoll.EpollEventLoopGroup;
+import org.apache.flink.shaded.netty4.io.netty.channel.epoll.EpollSocketChannel;
+import org.apache.flink.shaded.netty4.io.netty.channel.nio.NioEventLoopGroup;
+import org.apache.flink.shaded.netty4.io.netty.channel.socket.SocketChannel;
+import org.apache.flink.shaded.netty4.io.netty.channel.socket.nio.NioSocketChannel;
+import org.apache.flink.shaded.netty4.io.netty.handler.ssl.SslHandler;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
-import java.net.SocketAddress;
+import javax.annotation.Nullable;
 
-import static com.google.common.base.Preconditions.checkState;
+import java.io.IOException;
+import java.net.InetSocketAddress;
+
+import static org.apache.flink.util.Preconditions.checkState;
 
 class NettyClient {
 
@@ -43,16 +47,23 @@ class NettyClient {
 
 	private final NettyConfig config;
 
+	private NettyProtocol protocol;
+
 	private Bootstrap bootstrap;
+
+	@Nullable
+	private SSLHandlerFactory clientSSLFactory;
 
 	NettyClient(NettyConfig config) {
 		this.config = config;
 	}
 
-	void init(final NettyProtocol protocol) throws IOException {
+	void init(final NettyProtocol protocol, NettyBufferPool nettyBufferPool) throws IOException {
 		checkState(bootstrap == null, "Netty client has already been initialized.");
 
-		long start = System.currentTimeMillis();
+		this.protocol = protocol;
+
+		final long start = System.nanoTime();
 
 		bootstrap = new Bootstrap();
 
@@ -91,7 +102,7 @@ class NettyClient {
 		bootstrap.option(ChannelOption.CONNECT_TIMEOUT_MILLIS, config.getClientConnectTimeoutSeconds() * 1000);
 
 		// Pooled allocator for Netty's ByteBuf instances
-		bootstrap.option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT);
+		bootstrap.option(ChannelOption.ALLOCATOR, nettyBufferPool);
 
 		// Receive and send buffer size
 		int receiveAndSendBufferSize = config.getSendAndReceiveBufferSize();
@@ -100,27 +111,26 @@ class NettyClient {
 			bootstrap.option(ChannelOption.SO_RCVBUF, receiveAndSendBufferSize);
 		}
 
-		// --------------------------------------------------------------------
-		// Child channel pipeline for accepted connections
-		// --------------------------------------------------------------------
+		try {
+			clientSSLFactory = config.createClientSSLEngineFactory();
+		} catch (Exception e) {
+			throw new IOException("Failed to initialize SSL Context for the Netty client", e);
+		}
 
-		bootstrap.handler(new ChannelInitializer<SocketChannel>() {
-			@Override
-			public void initChannel(SocketChannel channel) throws Exception {
-				channel.pipeline().addLast(protocol.getClientChannelHandlers());
-			}
-		});
-
-		long end = System.currentTimeMillis();
-		LOG.info("Successful initialization (took {} ms).", (end - start));
+		final long duration = (System.nanoTime() - start) / 1_000_000;
+		LOG.info("Successful initialization (took {} ms).", duration);
 	}
 
 	NettyConfig getConfig() {
 		return config;
 	}
 
+	Bootstrap getBootstrap() {
+		return bootstrap;
+	}
+
 	void shutdown() {
-		long start = System.currentTimeMillis();
+		final long start = System.nanoTime();
 
 		if (bootstrap != null) {
 			if (bootstrap.group() != null) {
@@ -129,8 +139,8 @@ class NettyClient {
 			bootstrap = null;
 		}
 
-		long end = System.currentTimeMillis();
-		LOG.info("Successful shutdown (took {} ms).", (end - start));
+		final long duration = (System.nanoTime() - start) / 1_000_000;
+		LOG.info("Successful shutdown (took {} ms).", duration);
 	}
 
 	private void initNioBootstrap() {
@@ -155,22 +165,42 @@ class NettyClient {
 	// Client connections
 	// ------------------------------------------------------------------------
 
-	ChannelFuture connect(SocketAddress serverSocketAddress) {
+	ChannelFuture connect(final InetSocketAddress serverSocketAddress) {
 		checkState(bootstrap != null, "Client has not been initialized yet.");
+
+		// --------------------------------------------------------------------
+		// Child channel pipeline for accepted connections
+		// --------------------------------------------------------------------
+
+		bootstrap.handler(new ChannelInitializer<SocketChannel>() {
+			@Override
+			public void initChannel(SocketChannel channel) throws Exception {
+
+				// SSL handler should be added first in the pipeline
+				if (clientSSLFactory != null) {
+					SslHandler sslHandler = clientSSLFactory.createNettySSLHandler(
+							channel.alloc(),
+							serverSocketAddress.getAddress().getCanonicalHostName(),
+							serverSocketAddress.getPort());
+					channel.pipeline().addLast("ssl", sslHandler);
+				}
+				channel.pipeline().addLast(protocol.getClientChannelHandlers());
+			}
+		});
 
 		try {
 			return bootstrap.connect(serverSocketAddress);
 		}
-		catch (io.netty.channel.ChannelException e) {
-			if ( (e.getCause() instanceof java.net.SocketException &&
+		catch (ChannelException e) {
+			if ((e.getCause() instanceof java.net.SocketException &&
 					e.getCause().getMessage().equals("Too many open files")) ||
-				(e.getCause() instanceof io.netty.channel.ChannelException &&
+				(e.getCause() instanceof ChannelException &&
 						e.getCause().getCause() instanceof java.net.SocketException &&
 						e.getCause().getCause().getMessage().equals("Too many open files")))
 			{
-				throw new io.netty.channel.ChannelException(
+				throw new ChannelException(
 						"The operating system does not offer enough file handles to open the network connection. " +
-								"Please increase the number of of available file handles.", e.getCause());
+								"Please increase the number of available file handles.", e.getCause());
 			}
 			else {
 				throw e;

@@ -23,14 +23,27 @@ import org.apache.flink.runtime.io.network.partition.consumer.InputGate;
 
 import java.io.IOException;
 
+/**
+ * Record oriented reader for immutable types.
+ *
+ * @param <T> Thy type of the records that is read.
+ */
 public class RecordReader<T extends IOReadableWritable> extends AbstractRecordReader<T> implements Reader<T> {
 
 	private final Class<T> recordType;
 
 	private T currentRecord;
 
-	public RecordReader(InputGate inputGate, Class<T> recordType) {
-		super(inputGate);
+	/**
+	 * Creates a new RecordReader that de-serializes records from the given input gate and
+	 * can spill partial records to disk, if they grow large.
+	 *
+	 * @param inputGate The input gate to read from.
+	 * @param tmpDirectories The temp directories. USed for spilling if the reader concurrently
+	 *                       reconstructs multiple large records.
+	 */
+	public RecordReader(InputGate inputGate, Class<T> recordType, String[] tmpDirectories) {
+		super(inputGate, tmpDirectories);
 
 		this.recordType = recordType;
 	}
@@ -73,12 +86,8 @@ public class RecordReader<T extends IOReadableWritable> extends AbstractRecordRe
 		try {
 			return recordType.newInstance();
 		}
-		catch (InstantiationException e) {
-			throw new RuntimeException("Cannot instantiate class " + recordType.getName(), e);
-		}
-		catch (IllegalAccessException e) {
+		catch (InstantiationException | IllegalAccessException e) {
 			throw new RuntimeException("Cannot instantiate class " + recordType.getName(), e);
 		}
 	}
-
 }

@@ -21,13 +21,15 @@ package org.apache.flink.runtime.checkpoint;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.runtime.jobmanager.RecoveryMode;
+import org.apache.flink.runtime.jobmanager.HighAvailabilityMode;
 import org.apache.flink.runtime.util.ZooKeeperUtils;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import java.util.concurrent.Executor;
+
+import static org.apache.flink.util.Preconditions.checkNotNull;
 
 /**
- * {@link CheckpointCoordinator} components in {@link RecoveryMode#ZOOKEEPER}.
+ * {@link CheckpointCoordinator} components in {@link HighAvailabilityMode#ZOOKEEPER}.
  */
 public class ZooKeeperCheckpointRecoveryFactory implements CheckpointRecoveryFactory {
 
@@ -35,27 +37,23 @@ public class ZooKeeperCheckpointRecoveryFactory implements CheckpointRecoveryFac
 
 	private final Configuration config;
 
-	public ZooKeeperCheckpointRecoveryFactory(CuratorFramework client, Configuration config) {
+	private final Executor executor;
+
+	public ZooKeeperCheckpointRecoveryFactory(
+			CuratorFramework client,
+			Configuration config,
+			Executor executor) {
 		this.client = checkNotNull(client, "Curator client");
 		this.config = checkNotNull(config, "Configuration");
+		this.executor = checkNotNull(executor, "Executor");
 	}
 
 	@Override
-	public void start() {
-		// Nothing to do
-	}
-
-	@Override
-	public void stop() {
-		client.close();
-	}
-
-	@Override
-	public CompletedCheckpointStore createCompletedCheckpoints(JobID jobId, ClassLoader userClassLoader)
+	public CompletedCheckpointStore createCheckpointStore(JobID jobId, int maxNumberOfCheckpointsToRetain, ClassLoader userClassLoader)
 			throws Exception {
 
 		return ZooKeeperUtils.createCompletedCheckpoints(client, config, jobId,
-				NUMBER_OF_SUCCESSFUL_CHECKPOINTS_TO_RETAIN, userClassLoader);
+				maxNumberOfCheckpointsToRetain, executor);
 	}
 
 	@Override

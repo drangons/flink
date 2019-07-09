@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -7,7 +7,7 @@
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,12 +15,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.streaming.api.watermark;
 
+import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.streaming.runtime.streamrecord.StreamElement;
 
 /**
- * A Watermark tells operators that receive it that no elements with a timestamp older or equal
+ * A Watermark tells operators that no elements with a timestamp older or equal
  * to the watermark timestamp should arrive at the operator. Watermarks are emitted at the
  * sources and propagate through the operators of the topology. Operators must themselves emit
  * watermarks to downstream operators using
@@ -29,23 +31,26 @@ import org.apache.flink.streaming.runtime.streamrecord.StreamElement;
  * that buffer elements, such as window operators, must forward a watermark after emission of
  * elements that is triggered by the arriving watermark.
  *
- * <p>
- * In some cases a watermark is only a heuristic and operators should be able to deal with
+ * <p>In some cases a watermark is only a heuristic and operators should be able to deal with
  * late elements. They can either discard those or update the result and emit updates/retractions
  * to downstream operations.
  *
- * <p>
- * When a source closes it will emit a final watermark with timestamp {@code Long.MAX_VALUE}. When
- * an operator receives this it will know that no more input will be arriving in the future.
- *
+ * <p>When a source closes it will emit a final watermark with timestamp {@code Long.MAX_VALUE}.
+ * When an operator receives this it will know that no more input will be arriving in the future.
  */
-public class Watermark extends StreamElement {
+@PublicEvolving
+public final class Watermark extends StreamElement {
 
-	/** The timestamp of the watermark */
+	/** The watermark that signifies end-of-event-time. */
+	public static final Watermark MAX_WATERMARK = new Watermark(Long.MAX_VALUE);
+
+	// ------------------------------------------------------------------------
+
+	/** The timestamp of the watermark in milliseconds. */
 	private final long timestamp;
 
 	/**
-	 * Creates a new watermark with the given timestamp.
+	 * Creates a new watermark with the given timestamp in milliseconds.
 	 */
 	public Watermark(long timestamp) {
 		this.timestamp = timestamp;
@@ -57,6 +62,8 @@ public class Watermark extends StreamElement {
 	public long getTimestamp() {
 		return timestamp;
 	}
+
+	// ------------------------------------------------------------------------
 
 	@Override
 	public boolean equals(Object o) {

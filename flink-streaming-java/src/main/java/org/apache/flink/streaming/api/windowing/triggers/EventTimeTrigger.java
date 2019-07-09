@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,8 +15,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.streaming.api.windowing.triggers;
 
+import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 
 /**
@@ -25,25 +27,55 @@ import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
  *
  * @see org.apache.flink.streaming.api.watermark.Watermark
  */
-public class EventTimeTrigger implements Trigger<Object, TimeWindow> {
+@PublicEvolving
+public class EventTimeTrigger extends Trigger<Object, TimeWindow> {
 	private static final long serialVersionUID = 1L;
 
 	private EventTimeTrigger() {}
 
 	@Override
 	public TriggerResult onElement(Object element, long timestamp, TimeWindow window, TriggerContext ctx) throws Exception {
-		ctx.registerEventTimeTimer(window.maxTimestamp());
-		return TriggerResult.CONTINUE;
+		if (window.maxTimestamp() <= ctx.getCurrentWatermark()) {
+			// if the watermark is already past the window fire immediately
+			return TriggerResult.FIRE;
+		} else {
+			ctx.registerEventTimeTimer(window.maxTimestamp());
+			return TriggerResult.CONTINUE;
+		}
 	}
 
 	@Override
 	public TriggerResult onEventTime(long time, TimeWindow window, TriggerContext ctx) {
-		return TriggerResult.FIRE_AND_PURGE;
+		return time == window.maxTimestamp() ?
+			TriggerResult.FIRE :
+			TriggerResult.CONTINUE;
 	}
 
 	@Override
 	public TriggerResult onProcessingTime(long time, TimeWindow window, TriggerContext ctx) throws Exception {
 		return TriggerResult.CONTINUE;
+	}
+
+	@Override
+	public void clear(TimeWindow window, TriggerContext ctx) throws Exception {
+		ctx.deleteEventTimeTimer(window.maxTimestamp());
+	}
+
+	@Override
+	public boolean canMerge() {
+		return true;
+	}
+
+	@Override
+	public void onMerge(TimeWindow window,
+			OnMergeContext ctx) {
+		// only register a timer if the watermark is not yet past the end of the merged window
+		// this is in line with the logic in onElement(). If the watermark is past the end of
+		// the window onElement() will fire and setting a timer here would fire the window twice.
+		long windowMaxTimestamp = window.maxTimestamp();
+		if (windowMaxTimestamp > ctx.getCurrentWatermark()) {
+			ctx.registerEventTimeTimer(windowMaxTimestamp);
+		}
 	}
 
 	@Override
@@ -54,8 +86,7 @@ public class EventTimeTrigger implements Trigger<Object, TimeWindow> {
 	/**
 	 * Creates an event-time trigger that fires once the watermark passes the end of the window.
 	 *
-	 * <p>
-	 * Once the trigger fires all elements are discarded. Elements that arrive late immediately
+	 * <p>Once the trigger fires all elements are discarded. Elements that arrive late immediately
 	 * trigger window evaluation with just this one element.
 	 */
 	public static EventTimeTrigger create() {

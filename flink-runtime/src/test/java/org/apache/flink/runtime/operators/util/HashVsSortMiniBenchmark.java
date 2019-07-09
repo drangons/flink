@@ -40,6 +40,7 @@ import org.apache.flink.runtime.operators.testutils.TestData.TupleGenerator.KeyM
 import org.apache.flink.runtime.operators.testutils.TestData.TupleGenerator.ValueMode;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.MutableObjectIterator;
+
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
@@ -96,7 +97,7 @@ public class HashVsSortMiniBenchmark {
 	}
 
 	@After
-	public void afterTest() {
+	public void afterTest() throws Exception {
 		if (this.memoryManager != null) {
 			Assert.assertTrue("Memory Leak: Not all memory has been returned to the memory manager.",
 				this.memoryManager.verifyEmpty());
@@ -105,10 +106,7 @@ public class HashVsSortMiniBenchmark {
 		}
 		
 		if (this.ioManager != null) {
-			this.ioManager.shutdown();
-			if (!this.ioManager.isProperlyShutDown()) {
-				Assert.fail("I/O manager failed to properly shut down.");
-			}
+			this.ioManager.close();
 			this.ioManager = null;
 		}
 	}
@@ -130,11 +128,13 @@ public class HashVsSortMiniBenchmark {
 			
 			final UnilateralSortMerger<Tuple2<Integer, String>> sorter1 = new UnilateralSortMerger<>(
 					this.memoryManager, this.ioManager, input1, this.parentTask, this.serializer1, 
-					this.comparator1.duplicate(), MEMORY_FOR_SORTER, 128, 0.8f, true);
+					this.comparator1.duplicate(), (double)MEMORY_FOR_SORTER/MEMORY_SIZE, 128, 0.8f,
+					true /*use large record handler*/, true);
 			
 			final UnilateralSortMerger<Tuple2<Integer, String>> sorter2 = new UnilateralSortMerger<>(
 					this.memoryManager, this.ioManager, input2, this.parentTask, this.serializer2, 
-					this.comparator2.duplicate(), MEMORY_FOR_SORTER, 128, 0.8f, true);
+					this.comparator2.duplicate(), (double)MEMORY_FOR_SORTER/MEMORY_SIZE, 128, 0.8f,
+					true /*use large record handler*/, true);
 			
 			final MutableObjectIterator<Tuple2<Integer, String>> sortedInput1 = sorter1.getIterator();
 			final MutableObjectIterator<Tuple2<Integer, String>> sortedInput2 = sorter2.getIterator();
@@ -184,7 +184,7 @@ public class HashVsSortMiniBenchmark {
 					new ReusingBuildFirstHashJoinIterator<>(
 						input1, input2, this.serializer1.getSerializer(), this.comparator1, 
 							this.serializer2.getSerializer(), this.comparator2, this.pairComparator11,
-							this.memoryManager, this.ioManager, this.parentTask, MEMORY_SIZE, false, true);
+							this.memoryManager, this.ioManager, this.parentTask, 1, false, false, true);
 			
 			iterator.open();
 			
@@ -223,7 +223,7 @@ public class HashVsSortMiniBenchmark {
 					new ReusingBuildSecondHashJoinIterator<>(
 						input1, input2, this.serializer1.getSerializer(), this.comparator1, 
 						this.serializer2.getSerializer(), this.comparator2, this.pairComparator11,
-						this.memoryManager, this.ioManager, this.parentTask, MEMORY_SIZE, false, true);
+						this.memoryManager, this.ioManager, this.parentTask, 1, false, false, true);
 			
 			iterator.open();
 			
@@ -242,6 +242,35 @@ public class HashVsSortMiniBenchmark {
 		}
 	}
 	
+	@Test
+	public void testSortOnly() throws Exception {
+		TestData.TupleGenerator generator1 = new TestData.TupleGenerator(SEED1, INPUT_1_SIZE / 10, 100, KeyMode.RANDOM, ValueMode.RANDOM_LENGTH);
+
+		final TestData.TupleGeneratorIterator input1 = new TestData.TupleGeneratorIterator(generator1, INPUT_1_SIZE);
+
+		long start = System.nanoTime();
+
+		final UnilateralSortMerger<Tuple2<Integer, String>> sorter = new UnilateralSortMerger<>(
+				this.memoryManager, this.ioManager, input1, this.parentTask, this.serializer1,
+				this.comparator1.duplicate(), (double)MEMORY_FOR_SORTER/MEMORY_SIZE, 128, 0.8f,
+				true /*use large record handler*/, true);
+
+		MutableObjectIterator<Tuple2<Integer, String>> iter = sorter.getIterator();
+
+		long stop1 = System.nanoTime();
+
+		Tuple2<Integer, String> t = new Tuple2<>();
+		while (iter.next() != null);
+
+		long stop2 = System.nanoTime();
+
+		long sortMsecs = (stop1 - start) / 1_000_000;
+		long allMsecs = (stop2 - start) / 1_000_000;
+
+		System.out.printf("Sort only took %d / %d msecs\n", sortMsecs, allMsecs);
+
+		sorter.close();
+	}
 	
 	private static final class NoOpMatcher implements FlatJoinFunction<Tuple2<Integer, String>, Tuple2<Integer, String>, Tuple2<Integer, String>> {
 		private static final long serialVersionUID = 1L;

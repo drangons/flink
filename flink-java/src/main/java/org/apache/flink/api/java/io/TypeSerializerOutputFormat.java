@@ -18,6 +18,7 @@
 
 package org.apache.flink.api.java.io;
 
+import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.io.BinaryOutputFormat;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
@@ -31,19 +32,20 @@ import java.io.IOException;
  * Stores elements by serializing them with their type serializer.
  * @param <T> type parameter
  */
+@PublicEvolving
 public class TypeSerializerOutputFormat<T> extends BinaryOutputFormat<T> implements InputTypeConfigurable {
 
 	private static final long serialVersionUID = -6653022644629315158L;
-	
+
 	private TypeSerializer<T> serializer;
 
 	@Override
 	protected void serialize(T record, DataOutputView dataOutput) throws IOException {
-		if(serializer == null){
+		if (serializer == null){
 			throw new RuntimeException("TypeSerializerOutputFormat requires a type serializer to " +
 					"be defined.");
 		}
-		
+
 		serializer.serialize(record, dataOutput);
 	}
 

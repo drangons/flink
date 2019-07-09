@@ -18,29 +18,30 @@
 
 package org.apache.flink.client.program;
 
+import org.apache.flink.api.common.Plan;
+import org.apache.flink.runtime.execution.librarycache.FlinkUserCodeClassLoaders;
+
 import java.io.File;
 import java.io.IOException;
 import java.net.URISyntaxException;
 import java.net.URL;
-import java.net.URLClassLoader;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-
-import org.apache.flink.api.common.Plan;
+import java.util.jar.JarFile;
 
 /**
  * A JobWithJars is a Flink dataflow plan, together with a bunch of JAR files that contain
  * the classes of the functions and libraries necessary for the execution.
  */
 public class JobWithJars {
-	
+
 	private Plan plan;
-	
+
 	private List<URL> jarFiles;
 
 	/**
-	 * classpaths that are needed during user code execution
+	 * classpaths that are needed during user code execution.
 	 */
 	private List<URL> classpaths;
 
@@ -68,7 +69,7 @@ public class JobWithJars {
 		this.jarFiles = Collections.singletonList(jarFile);
 		this.classpaths = Collections.<URL>emptyList();
 	}
-	
+
 	JobWithJars(Plan plan, List<URL> jarFiles, List<URL> classpaths, ClassLoader userCodeClassLoader) {
 		this.plan = plan;
 		this.jarFiles = jarFiles;
@@ -77,7 +78,7 @@ public class JobWithJars {
 	}
 
 	/**
-	 * Returns the plan
+	 * Returns the plan.
 	 */
 	public Plan getPlan() {
 		return this.plan;
@@ -89,17 +90,17 @@ public class JobWithJars {
 	public List<URL> getJarFiles() {
 		return this.jarFiles;
 	}
-	
+
 	/**
 	 * Returns list of classpaths that need to be submitted with the plan.
 	 */
 	public List<URL> getClasspaths() {
 		return classpaths;
 	}
-	
+
 	/**
 	 * Gets the {@link java.lang.ClassLoader} that must be used to load user code classes.
-	 * 
+	 *
 	 * @return The user code ClassLoader.
 	 */
 	public ClassLoader getUserCodeClassLoader() {
@@ -108,24 +109,28 @@ public class JobWithJars {
 		}
 		return this.userCodeClassLoader;
 	}
-	
 
 	public static void checkJarFile(URL jar) throws IOException {
 		File jarFile;
 		try {
 			jarFile = new File(jar.toURI());
 		} catch (URISyntaxException e) {
-			throw new IOException("JAR file path is invalid '" + jar + "'");
+			throw new IOException("JAR file path is invalid '" + jar + '\'');
 		}
 		if (!jarFile.exists()) {
-			throw new IOException("JAR file does not exist '" + jarFile.getAbsolutePath() + "'");
+			throw new IOException("JAR file does not exist '" + jarFile.getAbsolutePath() + '\'');
 		}
 		if (!jarFile.canRead()) {
-			throw new IOException("JAR file can't be read '" + jarFile.getAbsolutePath() + "'");
+			throw new IOException("JAR file can't be read '" + jarFile.getAbsolutePath() + '\'');
 		}
-		// TODO: Check if proper JAR file
+
+		try (JarFile ignored = new JarFile(jarFile)) {
+			// verify that we can open the Jar file
+		} catch (IOException e) {
+			throw new IOException("Error while opening jar file '" + jarFile.getAbsolutePath() + '\'', e);
+		}
 	}
-	
+
 	public static ClassLoader buildUserCodeClassLoader(List<URL> jars, List<URL> classpaths, ClassLoader parent) {
 		URL[] urls = new URL[jars.size() + classpaths.size()];
 		for (int i = 0; i < jars.size(); i++) {
@@ -134,6 +139,6 @@ public class JobWithJars {
 		for (int i = 0; i < classpaths.size(); i++) {
 			urls[i + jars.size()] = classpaths.get(i);
 		}
-		return new URLClassLoader(urls, parent);
+		return FlinkUserCodeClassLoaders.parentFirst(urls, parent);
 	}
 }

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,22 +15,24 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.streaming.api.windowing.triggers;
 
-import com.google.common.annotations.VisibleForTesting;
+import org.apache.flink.annotation.PublicEvolving;
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.streaming.api.windowing.windows.Window;
 
 /**
  * A trigger that can turn any {@link Trigger} into a purging {@code Trigger}.
  *
- * <p>
- * When the nested trigger fires, this will return a {@code FIRE_AND_PURGE}
- * {@link org.apache.flink.streaming.api.windowing.triggers.Trigger.TriggerResult}
+ * <p>When the nested trigger fires, this will return a {@code FIRE_AND_PURGE}
+ * {@link TriggerResult}.
  *
  * @param <T> The type of elements on which this trigger can operate.
  * @param <W> The type of {@link Window Windows} on which this trigger can operate.
  */
-public class PurgingTrigger<T, W extends Window> implements Trigger<T, W> {
+@PublicEvolving
+public class PurgingTrigger<T, W extends Window> extends Trigger<T, W> {
 	private static final long serialVersionUID = 1L;
 
 	private Trigger<T, W> nestedTrigger;
@@ -42,40 +44,34 @@ public class PurgingTrigger<T, W extends Window> implements Trigger<T, W> {
 	@Override
 	public TriggerResult onElement(T element, long timestamp, W window, TriggerContext ctx) throws Exception {
 		TriggerResult triggerResult = nestedTrigger.onElement(element, timestamp, window, ctx);
-		switch (triggerResult) {
-			case FIRE:
-				return TriggerResult.FIRE_AND_PURGE;
-			case FIRE_AND_PURGE:
-				return TriggerResult.FIRE_AND_PURGE;
-			default:
-				return TriggerResult.CONTINUE;
-		}
+		return triggerResult.isFire() ? TriggerResult.FIRE_AND_PURGE : triggerResult;
 	}
 
 	@Override
 	public TriggerResult onEventTime(long time, W window, TriggerContext ctx) throws Exception {
 		TriggerResult triggerResult = nestedTrigger.onEventTime(time, window, ctx);
-		switch (triggerResult) {
-			case FIRE:
-				return TriggerResult.FIRE_AND_PURGE;
-			case FIRE_AND_PURGE:
-				return TriggerResult.FIRE_AND_PURGE;
-			default:
-				return TriggerResult.CONTINUE;
-		}
+		return triggerResult.isFire() ? TriggerResult.FIRE_AND_PURGE : triggerResult;
 	}
 
 	@Override
 	public TriggerResult onProcessingTime(long time, W window, TriggerContext ctx) throws Exception {
 		TriggerResult triggerResult = nestedTrigger.onProcessingTime(time, window, ctx);
-		switch (triggerResult) {
-			case FIRE:
-				return TriggerResult.FIRE_AND_PURGE;
-			case FIRE_AND_PURGE:
-				return TriggerResult.FIRE_AND_PURGE;
-			default:
-				return TriggerResult.CONTINUE;
-		}
+		return triggerResult.isFire() ? TriggerResult.FIRE_AND_PURGE : triggerResult;
+	}
+
+	@Override
+	public void clear(W window, TriggerContext ctx) throws Exception {
+		nestedTrigger.clear(window, ctx);
+	}
+
+	@Override
+	public boolean canMerge() {
+		return nestedTrigger.canMerge();
+	}
+
+	@Override
+	public void onMerge(W window, OnMergeContext ctx) throws Exception {
+		nestedTrigger.onMerge(window, ctx);
 	}
 
 	@Override

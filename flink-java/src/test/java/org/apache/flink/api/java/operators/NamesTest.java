@@ -18,11 +18,7 @@
 
 package org.apache.flink.api.java.operators;
 
-import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-
+import org.apache.flink.api.common.Plan;
 import org.apache.flink.api.common.functions.FilterFunction;
 import org.apache.flink.api.common.functions.FlatJoinFunction;
 import org.apache.flink.api.common.operators.Operator;
@@ -30,13 +26,18 @@ import org.apache.flink.api.common.operators.base.InnerJoinOperatorBase;
 import org.apache.flink.api.java.DataSet;
 import org.apache.flink.api.java.ExecutionEnvironment;
 import org.apache.flink.api.java.io.DiscardingOutputFormat;
-import org.apache.flink.api.java.operators.translation.JavaPlan;
 import org.apache.flink.api.java.operators.translation.PlanFilterOperator;
 import org.apache.flink.api.java.tuple.Tuple1;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.Visitor;
+
 import org.junit.Assert;
 import org.junit.Test;
+
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 /**
  * Test proper automated assignment of the transformation's name, if not set by the user.
@@ -48,8 +49,7 @@ public class NamesTest implements Serializable {
 	public void testDefaultName() {
 		ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
 
-		DataSet<String> strs = env.fromCollection(Arrays.asList( new String[] {"a", "b"}));
-
+		DataSet<String> strs = env.fromCollection(Arrays.asList("a", "b"));
 
 		// WARNING: The test will fail if this line is being moved down in the file (the line-number is hard-coded)
 		strs.filter(new FilterFunction<String>() {
@@ -60,7 +60,7 @@ public class NamesTest implements Serializable {
 				return value.equals("a");
 			}
 		}).output(new DiscardingOutputFormat<String>());
-		JavaPlan plan = env.createProgramPlan();
+		Plan plan = env.createProgramPlan();
 		testForName("Filter at testDefaultName(NamesTest.java:55)", plan);
 	}
 
@@ -68,7 +68,7 @@ public class NamesTest implements Serializable {
 	public void testGivenName() {
 		ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
 
-		DataSet<String> strs = env.fromCollection(Arrays.asList( new String[] {"a", "b"}));
+		DataSet<String> strs = env.fromCollection(Arrays.asList("a", "b"));
 		strs.filter(new FilterFunction<String>() {
 			private static final long serialVersionUID = 1L;
 			@Override
@@ -76,7 +76,7 @@ public class NamesTest implements Serializable {
 				return value.equals("a");
 			}
 		}).name("GivenName").output(new DiscardingOutputFormat<String>());
-		JavaPlan plan = env.createProgramPlan();
+		Plan plan = env.createProgramPlan();
 		testForName("GivenName", plan);
 	}
 
@@ -92,31 +92,31 @@ public class NamesTest implements Serializable {
 		DataSet<Tuple1<String>> strs1 = env.fromCollection(strLi);
 		strs.join(strs1).where(0).equalTo(0).with(new FlatJoinFunction<Tuple1<String>, Tuple1<String>, String>() {
 			@Override
-			public void join(Tuple1<String> first, Tuple1<String> second,
-							 Collector<String> out) throws Exception {
+			public void join(Tuple1<String> first, Tuple1<String> second, Collector<String> out) throws Exception {
 				//
 			}
 		})
 				.output(new DiscardingOutputFormat<String>());
-		JavaPlan plan = env.createProgramPlan();
+		Plan plan = env.createProgramPlan();
 		plan.accept(new Visitor<Operator<?>>() {
 			@Override
 			public boolean preVisit(Operator<?> visitable) {
-				if(visitable instanceof InnerJoinOperatorBase) {
+				if (visitable instanceof InnerJoinOperatorBase) {
 					Assert.assertEquals("Join at testJoinWith(NamesTest.java:93)", visitable.getName());
 				}
 				return true;
 			}
+
 			@Override
 			public void postVisit(Operator<?> visitable) {}
 		});
 	}
 
-	private static void testForName(final String expected, JavaPlan plan) {
+	private static void testForName(final String expected, Plan plan) {
 		plan.accept(new Visitor<Operator<?>>() {
 			@Override
 			public boolean preVisit(Operator<?> visitable) {
-				if(visitable instanceof PlanFilterOperator<?>) {
+				if (visitable instanceof PlanFilterOperator<?>) {
 					// cast is actually not required. Its just a check for the right element
 					PlanFilterOperator<?> filterOp = (PlanFilterOperator<?>) visitable;
 					Assert.assertEquals(expected, filterOp.getName());

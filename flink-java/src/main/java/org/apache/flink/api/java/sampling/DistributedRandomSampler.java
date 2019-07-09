@@ -15,7 +15,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.api.java.sampling;
+
+import org.apache.flink.annotation.Internal;
 
 import java.util.Iterator;
 import java.util.PriorityQueue;
@@ -30,6 +33,7 @@ import java.util.PriorityQueue;
  *
  * @param <T> The input data type.
  */
+@Internal
 public abstract class DistributedRandomSampler<T> extends RandomSampler<T> {
 
 	protected final int numSamples;
@@ -38,7 +42,7 @@ public abstract class DistributedRandomSampler<T> extends RandomSampler<T> {
 		this.numSamples = numSamples;
 	}
 
-	protected final Iterator<IntermediateSampleData<T>> EMPTY_INTERMEDIATE_ITERABLE =
+	protected final Iterator<IntermediateSampleData<T>> emptyIntermediateIterable =
 		new SampledIterator<IntermediateSampleData<T>>() {
 			@Override
 			public boolean hasNext() {
@@ -68,7 +72,7 @@ public abstract class DistributedRandomSampler<T> extends RandomSampler<T> {
 	 */
 	public Iterator<T> sampleInCoordinator(Iterator<IntermediateSampleData<T>> input) {
 		if (numSamples == 0) {
-			return EMPTY_ITERABLE;
+			return emptyIterable;
 		}
 
 		// This queue holds fixed number elements with the top K weight for the coordinator.

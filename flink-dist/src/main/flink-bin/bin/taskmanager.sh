@@ -17,84 +17,80 @@
 # limitations under the License.
 ################################################################################
 
-# Start/stop a Flink JobManager.
-USAGE="Usage: taskmanager.sh (start [batch|streaming])|stop|stop-all)"
+# Start/stop a Flink TaskManager.
+USAGE="Usage: taskmanager.sh (start|start-foreground|stop|stop-all)"
 
 STARTSTOP=$1
-STREAMINGMODE=$2
+
+ARGS=("${@:2}")
+
+if [[ $STARTSTOP != "start" ]] && [[ $STARTSTOP != "start-foreground" ]] && [[ $STARTSTOP != "stop" ]] && [[ $STARTSTOP != "stop-all" ]]; then
+  echo $USAGE
+  exit 1
+fi
 
 bin=`dirname "$0"`
 bin=`cd "$bin"; pwd`
 
 . "$bin"/config.sh
 
-if [[ $STARTSTOP == "start" ]]; then
+ENTRYPOINT=taskexecutor
 
-    # Use batch mode as default
-    if [ -z $STREAMINGMODE ]; then
-        echo "Missing streaming mode (batch|streaming). Using 'batch'."
-        STREAMINGMODE="batch"
-    fi
-    
-    # if mode is streaming and no other JVM options are set, set the 'Concurrent Mark Sweep GC'
-    if [[ $STREAMINGMODE == "streaming" ]] && [ -z $FLINK_ENV_JAVA_OPTS ]; then
-    
-        JAVA_VERSION=$($JAVA_RUN -version 2>&1 | sed 's/.*version "\(.*\)\.\(.*\)\..*"/\1\2/; 1q')
-    
-        # set the GC to G1 in Java 8 and to CMS in Java 7
-        if [[ ${JAVA_VERSION} =~ ${IS_NUMBER} ]]; then
-            if [ "$JAVA_VERSION" -lt 18 ]; then
-                export JVM_ARGS="$JVM_ARGS -XX:+UseConcMarkSweepGC -XX:+CMSClassUnloadingEnabled"
-            else
-                export JVM_ARGS="$JVM_ARGS -XX:+UseG1GC"
-            fi
-        fi
+if [[ $STARTSTOP == "start" ]] || [[ $STARTSTOP == "start-foreground" ]]; then
+
+    # if memory allocation mode is lazy and no other JVM options are set,
+    # set the 'Concurrent Mark Sweep GC'
+    if [[ $FLINK_TM_MEM_PRE_ALLOCATE == "false" ]] && [ -z "${FLINK_ENV_JAVA_OPTS}" ] && [ -z "${FLINK_ENV_JAVA_OPTS_TM}" ]; then
+        export JVM_ARGS="$JVM_ARGS -XX:+UseG1GC"
     fi
 
-    if [[ ! ${FLINK_TM_HEAP} =~ ${IS_NUMBER} ]] || [[ "${FLINK_TM_HEAP}" -lt "0" ]]; then
+    if [ ! -z "${FLINK_TM_HEAP_MB}" ] && [ "${FLINK_TM_HEAP}" == 0 ]; then
+	    echo "used deprecated key \`${KEY_TASKM_MEM_MB}\`, please replace with key \`${KEY_TASKM_MEM_SIZE}\`"
+    else
+	    flink_tm_heap_bytes=$(parseBytes ${FLINK_TM_HEAP})
+	    FLINK_TM_HEAP_MB=$(getMebiBytes ${flink_tm_heap_bytes})
+    fi
+
+    if [[ ! ${FLINK_TM_HEAP_MB} =~ ${IS_NUMBER} ]] || [[ "${FLINK_TM_HEAP_MB}" -lt "0" ]]; then
         echo "[ERROR] Configured TaskManager JVM heap size is not a number. Please set '${KEY_TASKM_MEM_SIZE}' in ${FLINK_CONF_FILE}."
         exit 1
     fi
 
-    if [ "${FLINK_TM_HEAP}" -gt "0" ]; then
+    if [ "${FLINK_TM_HEAP_MB}" -gt "0" ]; then
 
-        TM_HEAP_SIZE=${FLINK_TM_HEAP}
+        TM_HEAP_SIZE=$(calculateTaskManagerHeapSizeMB)
         # Long.MAX_VALUE in TB: This is an upper bound, much less direct memory will be used
-        #
         TM_MAX_OFFHEAP_SIZE="8388607T"
-
-        if [[ "${STREAMINGMODE}" == "batch" ]] && useOffHeapMemory; then
-            if [[ "${FLINK_TM_MEM_MANAGED_SIZE}" -gt "0" ]]; then
-                # We split up the total memory in heap and off-heap memory
-                if [[ "${FLINK_TM_HEAP}" -le "${FLINK_TM_MEM_MANAGED_SIZE}" ]]; then
-                    echo "[ERROR] Configured TaskManager memory size ('${KEY_TASKM_MEM_SIZE}') must be larger than the managed memory size ('${KEY_TASKM_MEM_MANAGED_SIZE}')."
-                    exit 1
-                fi
-                TM_HEAP_SIZE=$((FLINK_TM_HEAP - FLINK_TM_MEM_MANAGED_SIZE))
-            else
-                # Bash only performs integer arithmetic so floating point computation is performed using bc
-                command -v bc >/dev/null 2>&1
-                if [[ $? -ne 0 ]]; then
-                    echo "[ERROR] Program 'bc' not found. Please install bc or define '${KEY_TASKM_MEM_MANAGED_SIZE}' instead of '${KEY_TASKM_MEM_MANAGED_FRACTION}' in ${FLINK_CONF_FILE}"
-                    exit 1
-                fi
-                # We calculate the memory using a fraction of the total memory
-                if [[ `bc -l <<< "${FLINK_TM_MEM_MANAGED_FRACTION} >= 1.0"` != "0" ]] || [[ `bc -l <<< "${FLINK_TM_MEM_MANAGED_FRACTION} <= 0.0"` != "0" ]]; then
-                    echo "[ERROR] Configured TaskManager managed memory fraction is not a valid value. Please set '${KEY_TASKM_MEM_MANAGED_FRACTION}' in ${FLINK_CONF_FILE}"
-                    exit 1
-                fi
-                # recalculate the JVM heap memory by taking the off-heap ratio into account
-                OFFHEAP_MANAGED_MEMORY_SIZE=`printf '%.0f\n' $(bc -l <<< "${FLINK_TM_HEAP} * ${FLINK_TM_MEM_MANAGED_FRACTION}")`
-                TM_HEAP_SIZE=$((FLINK_TM_HEAP - OFFHEAP_MANAGED_MEMORY_SIZE))
-            fi
-        fi
 
         export JVM_ARGS="${JVM_ARGS} -Xms${TM_HEAP_SIZE}M -Xmx${TM_HEAP_SIZE}M -XX:MaxDirectMemorySize=${TM_MAX_OFFHEAP_SIZE}"
 
     fi
 
+    # Add TaskManager-specific JVM options
+    export FLINK_ENV_JAVA_OPTS="${FLINK_ENV_JAVA_OPTS} ${FLINK_ENV_JAVA_OPTS_TM}"
+
     # Startup parameters
-    args=("--configDir" "${FLINK_CONF_DIR}" "--streamingMode" "${STREAMINGMODE}")
+    ARGS+=("--configDir" "${FLINK_CONF_DIR}")
 fi
 
-"${FLINK_BIN_DIR}"/flink-daemon.sh $STARTSTOP taskmanager "${args[@]}"
+if [[ $STARTSTOP == "start-foreground" ]]; then
+    exec "${FLINK_BIN_DIR}"/flink-console.sh $ENTRYPOINT "${ARGS[@]}"
+else
+    if [[ $FLINK_TM_COMPUTE_NUMA == "false" ]]; then
+        # Start a single TaskManager
+        "${FLINK_BIN_DIR}"/flink-daemon.sh $STARTSTOP $ENTRYPOINT "${ARGS[@]}"
+    else
+        # Example output from `numactl --show` on an AWS c4.8xlarge:
+        # policy: default
+        # preferred node: current
+        # physcpubind: 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35
+        # cpubind: 0 1
+        # nodebind: 0 1
+        # membind: 0 1
+        read -ra NODE_LIST <<< $(numactl --show | grep "^nodebind: ")
+        for NODE_ID in "${NODE_LIST[@]:1}"; do
+            # Start a TaskManager for each NUMA node
+            numactl --membind=$NODE_ID --cpunodebind=$NODE_ID -- "${FLINK_BIN_DIR}"/flink-daemon.sh $STARTSTOP $ENTRYPOINT "${ARGS[@]}"
+        done
+    fi
+fi

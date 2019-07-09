@@ -18,17 +18,26 @@
 
 package org.apache.flink.runtime.checkpoint;
 
+import org.apache.flink.runtime.jobgraph.JobStatus;
+import org.apache.flink.util.FlinkRuntimeException;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.List;
+import java.util.ListIterator;
 
 /**
  * A bounded LIFO-queue of {@link CompletedCheckpoint} instances.
  */
 public interface CompletedCheckpointStore {
 
+	Logger LOG = LoggerFactory.getLogger(CompletedCheckpointStore.class);
+
 	/**
 	 * Recover available {@link CompletedCheckpoint} instances.
 	 *
-	 * <p>After a call to this method, {@link #getLatestCheckpoint()} returns the latest
+	 * <p>After a call to this method, {@link #getLatestCheckpoint(boolean)} returns the latest
 	 * available checkpoint.
 	 */
 	void recover() throws Exception;
@@ -37,8 +46,7 @@ public interface CompletedCheckpointStore {
 	 * Adds a {@link CompletedCheckpoint} instance to the list of completed checkpoints.
 	 *
 	 * <p>Only a bounded number of checkpoints is kept. When exceeding the maximum number of
-	 * retained checkpoints, the oldest one will be discarded via {@link
-	 * CompletedCheckpoint#discard(ClassLoader)}.
+	 * retained checkpoints, the oldest one will be discarded.
 	 */
 	void addCheckpoint(CompletedCheckpoint checkpoint) throws Exception;
 
@@ -46,13 +54,43 @@ public interface CompletedCheckpointStore {
 	 * Returns the latest {@link CompletedCheckpoint} instance or <code>null</code> if none was
 	 * added.
 	 */
-	CompletedCheckpoint getLatestCheckpoint() throws Exception;
+	default CompletedCheckpoint getLatestCheckpoint(boolean isPreferCheckpointForRecovery) throws Exception {
+		if (getAllCheckpoints().isEmpty()) {
+			return null;
+		}
+
+		CompletedCheckpoint candidate = getAllCheckpoints().get(getAllCheckpoints().size() - 1);
+		if (isPreferCheckpointForRecovery && getAllCheckpoints().size() > 1) {
+			List<CompletedCheckpoint> allCheckpoints;
+			try {
+				allCheckpoints = getAllCheckpoints();
+				ListIterator<CompletedCheckpoint> listIterator = allCheckpoints.listIterator(allCheckpoints.size() - 1);
+				while (listIterator.hasPrevious()) {
+					CompletedCheckpoint prev = listIterator.previous();
+					if (!prev.getProperties().isSavepoint()) {
+						candidate = prev;
+						LOG.info("Found a completed checkpoint before the latest savepoint, will use it to recover!");
+						break;
+					}
+				}
+			} catch (Exception e) {
+				LOG.error("Method getAllCheckpoints caused exception : ", e);
+				throw new FlinkRuntimeException(e);
+			}
+		}
+
+		return candidate;
+	}
 
 	/**
-	 * Discards all added {@link CompletedCheckpoint} instances via {@link
-	 * CompletedCheckpoint#discard(ClassLoader)}.
+	 * Shuts down the store.
+	 *
+	 * <p>The job status is forwarded and used to decide whether state should
+	 * actually be discarded or kept.
+	 *
+	 * @param jobStatus Job state on shut down
 	 */
-	void discardAllCheckpoints() throws Exception;
+	void shutdown(JobStatus jobStatus) throws Exception;
 
 	/**
 	 * Returns all {@link CompletedCheckpoint} instances.
@@ -66,4 +104,18 @@ public interface CompletedCheckpointStore {
 	 */
 	int getNumberOfRetainedCheckpoints();
 
+	/**
+	 * Returns the max number of retained checkpoints.
+	 */
+	int getMaxNumberOfRetainedCheckpoints();
+
+	/**
+	 * This method returns whether the completed checkpoint store requires checkpoints to be
+	 * externalized. Externalized checkpoints have their meta data persisted, which the checkpoint
+	 * store can exploit (for example by simply pointing the persisted metadata).
+	 * 
+	 * @return True, if the store requires that checkpoints are externalized before being added, false
+	 *         if the store stores the metadata itself.
+	 */
+	boolean requiresExternalizedCheckpoints();
 }

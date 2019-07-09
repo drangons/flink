@@ -17,48 +17,63 @@
 # limitations under the License.
 ################################################################################
 
+RUBY=${RUBY:-ruby}
+GEM=${GEM:-gem}
+CACHE_DIR=${CACHE_DIR:-".rubydeps"}
 
-HAS_JEKYLL=true
+set -e
+cd "$(dirname ${BASH_SOURCE[0]})"
 
-command -v jekyll > /dev/null
-if [ $? -ne 0 ]; then
-	echo -n "ERROR: Could not find jekyll. "
-	echo "Please install with 'gem install jekyll' (see http://jekyllrb.com)."
+DIR="`pwd`"
 
-	HAS_JEKYLL=false
+# We need at least bundler to proceed
+if [ "`command -v bundle`" == "" ]; then
+	RUBYGEM_BINDIR=""
+
+	# Adjust the PATH to discover locally installed ruby gem binaries
+	export PATH="$(${RUBY} -e 'puts Gem.user_dir')/bin:$PATH"
+
+	if [ "`command -v bundle`" == "" ]; then
+		echo "WARN: Could not find bundle."
+		echo "Attempting to install locally. If this doesn't work, please install with 'gem install bundler'."
+
+		# install bundler locally
+		${GEM} install --user-install --no-format-executable bundler
+	fi
 fi
 
-command -v redcarpet > /dev/null
-if [ $? -ne 0 ]; then
-	echo -n "WARN: Could not find redcarpet. "
-	echo -n "Please install with 'sudo gem install redcarpet' (see https://github.com/vmg/redcarpet). "
-	echo "Redcarpet is needed for Markdown parsing and table of contents generation."
-fi
-
-command -v pygmentize > /dev/null
-if [ $? -ne 0 ]; then
-	echo -n "WARN: Could not find pygments. "
-	echo -n "Please install with 'sudo easy_install Pygments' (requires Python; see http://pygments.org). "
-	echo "Pygments is needed for syntax highlighting of the code examples."
-fi
-
-DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+# Install Ruby dependencies locally
+bundle install --path ${CACHE_DIR}
 
 DOCS_SRC=${DIR}
-DOCS_DST=${DOCS_SRC}/target
+DOCS_DST=${DOCS_SRC}/content
 
 # default jekyll command is to just build site
 JEKYLL_CMD="build"
 
+JEKYLL_CONFIG=""
+
 # if -p flag is provided, serve site on localhost
-while getopts ":p" opt; do
+# -i is like -p, but incremental (only rebuilds the modified file)
+# -e builds only english documentation
+# -z builds only chinese documentation 
+while getopts "piez" opt; do
 	case $opt in
 		p)
-		JEKYLL_CMD="serve --baseurl "" --watch"
+		JEKYLL_CMD="serve --baseurl= --watch"
+		;;
+		i)
+		[[ `${RUBY} -v` =~ 'ruby 1' ]] && echo "Error: building the docs with the incremental option requires at least ruby 2.0" && exit 1
+		JEKYLL_CMD="liveserve --baseurl= --watch --incremental"
+		;;
+		e)
+		JEKYLL_CONFIG="--config _config.yml,_config_dev_en.yml"
+		;;
+		z)
+		JEKYLL_CONFIG="--config _config.yml,_config_dev_zh.yml"
 		;;
 	esac
 done
 
-if $HAS_JEKYLL; then
-	jekyll ${JEKYLL_CMD} --source ${DOCS_SRC} --destination ${DOCS_DST}
-fi
+# use 'bundle exec' to insert the local Ruby dependencies
+bundle exec jekyll ${JEKYLL_CMD} ${JEKYLL_CONFIG} --source "${DOCS_SRC}" --destination "${DOCS_DST}"

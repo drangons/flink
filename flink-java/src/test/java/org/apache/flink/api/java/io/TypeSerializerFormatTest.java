@@ -31,6 +31,7 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.core.fs.Path;
 import org.apache.flink.core.memory.DataOutputView;
+
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.runner.RunWith;
@@ -38,6 +39,9 @@ import org.junit.runners.Parameterized;
 
 import java.io.IOException;
 
+/**
+ * Tests for type serialization format.
+ */
 @RunWith(Parameterized.class)
 public class TypeSerializerFormatTest extends SequentialFormatTestBase<Tuple2<Integer, String>> {
 
@@ -50,7 +54,7 @@ public class TypeSerializerFormatTest extends SequentialFormatTestBase<Tuple2<In
 	public TypeSerializerFormatTest(int numberOfTuples, long blockSize, int parallelism) {
 		super(numberOfTuples, blockSize, parallelism);
 
-        resultType = TypeExtractor.getForObject(getRecord(0));
+		resultType = TypeExtractor.getForObject(getRecord(0));
 
 		serializer = resultType.createSerializer(new ExecutionConfig());
 	}
@@ -63,11 +67,11 @@ public class TypeSerializerFormatTest extends SequentialFormatTestBase<Tuple2<In
 	@Override
 	protected BinaryInputFormat<Tuple2<Integer, String>> createInputFormat() {
 		Configuration configuration = new Configuration();
-		configuration.setLong(BinaryInputFormat.BLOCK_SIZE_PARAMETER_KEY, this.blockSize);
 
 		final TypeSerializerInputFormat<Tuple2<Integer, String>> inputFormat = new
 				TypeSerializerInputFormat<Tuple2<Integer, String>>(resultType);
 		inputFormat.setFilePath(this.tempFile.toURI().toString());
+		inputFormat.setBlockSize(this.blockSize);
 
 		inputFormat.configure(configuration);
 		return inputFormat;

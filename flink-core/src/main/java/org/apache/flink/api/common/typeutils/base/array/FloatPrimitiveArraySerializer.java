@@ -20,6 +20,9 @@ package org.apache.flink.api.common.typeutils.base.array;
 
 import java.io.IOException;
 
+import org.apache.flink.annotation.Internal;
+import org.apache.flink.api.common.typeutils.SimpleTypeSerializerSnapshot;
+import org.apache.flink.api.common.typeutils.TypeSerializerSnapshot;
 import org.apache.flink.api.common.typeutils.base.TypeSerializerSingleton;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
@@ -27,6 +30,7 @@ import org.apache.flink.core.memory.DataOutputView;
 /**
  * A serializer for float arrays.
  */
+@Internal
 public final class FloatPrimitiveArraySerializer extends TypeSerializerSingleton<float[]>{
 
 	private static final long serialVersionUID = 1L;
@@ -34,8 +38,7 @@ public final class FloatPrimitiveArraySerializer extends TypeSerializerSingleton
 	private static final float[] EMPTY = new float[0];
 
 	public static final FloatPrimitiveArraySerializer INSTANCE = new FloatPrimitiveArraySerializer();
-	
-	
+
 	@Override
 	public boolean isImmutableType() {
 		return false;
@@ -102,7 +105,20 @@ public final class FloatPrimitiveArraySerializer extends TypeSerializerSingleton
 	}
 
 	@Override
-	public boolean canEqual(Object obj) {
-		return obj instanceof FloatPrimitiveArraySerializer;
+	public TypeSerializerSnapshot<float[]> snapshotConfiguration() {
+		return new FloatPrimitiveArraySerializerSnapshot();
+	}
+
+	// ------------------------------------------------------------------------
+
+	/**
+	 * Serializer configuration snapshot for compatibility and format evolution.
+	 */
+	@SuppressWarnings("WeakerAccess")
+	public static final class FloatPrimitiveArraySerializerSnapshot extends SimpleTypeSerializerSnapshot<float[]> {
+
+		public FloatPrimitiveArraySerializerSnapshot() {
+			super(() -> INSTANCE);
+		}
 	}
 }

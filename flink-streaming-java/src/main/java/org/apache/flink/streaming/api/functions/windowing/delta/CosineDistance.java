@@ -17,25 +17,24 @@
 
 package org.apache.flink.streaming.api.functions.windowing.delta;
 
+import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.streaming.api.functions.windowing.delta.extractor.Extractor;
 
 /**
  * This delta function calculates the cosine distance between two given vectors.
  * The cosine distance is defined as: cosineDistance=1-cosineSimilarity
- * 
- * Cosine similarity: http://en.wikipedia.org/wiki/Cosine_similarity
- * 
+ *
+ * <p>Cosine similarity: http://en.wikipedia.org/wiki/Cosine_similarity
+ *
  * @param <DATA>
  *            The input data type. This delta function works with a double[],
  *            but can extract/convert to it from any other given object in case
  *            the respective extractor has been set. See
  *            {@link ExtractionAwareDeltaFunction} for more information.
  */
+@PublicEvolving
 public class CosineDistance<DATA> extends ExtractionAwareDeltaFunction<DATA, double[]> {
 
-	/**
-	 * auto-generated id
-	 */
 	private static final long serialVersionUID = -1217813582965151599L;
 
 	public CosineDistance() {

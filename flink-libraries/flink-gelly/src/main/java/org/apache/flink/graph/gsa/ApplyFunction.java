@@ -59,17 +59,17 @@ public abstract class ApplyFunction<K, VV, M> implements Serializable {
 	//---------------------------------------------------------------------------------------------
 
 	/**
-	 * This method is invoked once per superstep, after the {@link SumFunction} 
+	 * This method is invoked once per superstep, after the {@link SumFunction}
 	 * in a {@link GatherSumApplyIteration}.
 	 * It updates the Vertex values.
-	 * 
+	 *
 	 * @param newValue the value computed during the current superstep.
 	 * @param currentValue the current Vertex value.
 	 */
 	public abstract void apply(M newValue, VV currentValue);
 
 	/**
-	 * Sets the result for the apply function
+	 * Sets the result for the apply function.
 	 *
 	 * @param result the result of the apply phase
 	 */
@@ -105,7 +105,7 @@ public abstract class ApplyFunction<K, VV, M> implements Serializable {
 	 * @return The aggregator registered under this name, or null, if no aggregator was registered.
 	 */
 	public <T extends Aggregator<?>> T getIterationAggregator(String name) {
-		return this.runtimeContext.<T>getIterationAggregator(name);
+		return this.runtimeContext.getIterationAggregator(name);
 	}
 
 	/**
@@ -115,7 +115,7 @@ public abstract class ApplyFunction<K, VV, M> implements Serializable {
 	 * @return The aggregated value of the previous iteration.
 	 */
 	public <T extends Value> T getPreviousIterationAggregate(String name) {
-		return this.runtimeContext.<T>getPreviousIterationAggregate(name);
+		return this.runtimeContext.getPreviousIterationAggregate(name);
 	}
 
 	/**
@@ -126,7 +126,7 @@ public abstract class ApplyFunction<K, VV, M> implements Serializable {
 	 * @return The broadcast data set.
 	 */
 	public <T> Collection<T> getBroadcastSet(String name) {
-		return this.runtimeContext.<T>getBroadcastVariable(name);
+		return this.runtimeContext.getBroadcastVariable(name);
 	}
 
 	// --------------------------------------------------------------------------------------------
@@ -137,7 +137,9 @@ public abstract class ApplyFunction<K, VV, M> implements Serializable {
 
 	private Collector<Vertex<K, VV>> out;
 
-	private Vertex<K, VV> outVal;
+	// use a local vertex instance so that the user does not overwrite a system
+	// instance used by JoinDriver
+	private Vertex<K, VV> outVal = new Vertex<>();
 
 	public void init(IterationRuntimeContext iterationRuntimeContext) {
 		this.runtimeContext = iterationRuntimeContext;
@@ -145,7 +147,7 @@ public abstract class ApplyFunction<K, VV, M> implements Serializable {
 
 	public void setOutput(Vertex<K, VV> vertex, Collector<Vertex<K, VV>> out) {
 		this.out = out;
-		this.outVal = vertex;
+		this.outVal.f0 = vertex.f0;
 	}
 
 }

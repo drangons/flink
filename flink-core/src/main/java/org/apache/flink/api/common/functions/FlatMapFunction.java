@@ -18,6 +18,7 @@
 
 package org.apache.flink.api.common.functions;
 
+import org.apache.flink.annotation.Public;
 import org.apache.flink.util.Collector;
 
 import java.io.Serializable;
@@ -27,17 +28,19 @@ import java.io.Serializable;
  * into zero, one, or more elements. Typical applications can be splitting elements, or unnesting lists
  * and arrays. Operations that produce multiple strictly one result element per input element can also
  * use the {@link MapFunction}.
- * <p>
- * The basic syntax for using a FlatMapFunction is as follows:
+ *
+ * <p>The basic syntax for using a FlatMapFunction is as follows:
  * <pre>{@code
  * DataSet<X> input = ...;
- * 
+ *
  * DataSet<Y> result = input.flatMap(new MyFlatMapFunction());
  * }</pre>
- * 
+ *
  * @param <T> Type of the input elements.
  * @param <O> Type of the returned elements.
  */
+@Public
+@FunctionalInterface
 public interface FlatMapFunction<T, O> extends Function, Serializable {
 
 	/**

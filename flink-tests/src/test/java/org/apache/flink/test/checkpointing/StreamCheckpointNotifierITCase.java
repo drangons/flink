@@ -21,109 +21,140 @@ package org.apache.flink.test.checkpointing;
 import org.apache.flink.api.common.functions.RichFilterFunction;
 import org.apache.flink.api.common.functions.RichMapFunction;
 import org.apache.flink.api.common.functions.RichReduceFunction;
+import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.api.java.tuple.Tuple1;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.streaming.api.checkpoint.CheckpointNotifier;
-import org.apache.flink.streaming.api.checkpoint.Checkpointed;
+import org.apache.flink.runtime.state.CheckpointListener;
+import org.apache.flink.streaming.api.checkpoint.ListCheckpointed;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.co.RichCoFlatMapFunction;
-import org.apache.flink.streaming.api.functions.sink.SinkFunction;
+import org.apache.flink.streaming.api.functions.sink.DiscardingSink;
 import org.apache.flink.streaming.api.functions.source.ParallelSourceFunction;
 import org.apache.flink.streaming.api.functions.source.RichSourceFunction;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.operators.TwoInputStreamOperator;
+import org.apache.flink.test.util.AbstractTestBase;
 import org.apache.flink.util.Collector;
+
+import org.junit.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Random;
+import java.util.concurrent.atomic.AtomicLong;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 /**
- * Integration test for the {@link CheckpointNotifier} interface. The test ensures that
- * {@link CheckpointNotifier#notifyCheckpointComplete(long)} is called for some completed
+ * Integration test for the {@link CheckpointListener} interface. The test ensures that
+ * {@link CheckpointListener#notifyCheckpointComplete(long)} is called for completed
  * checkpoints, that it is called at most once for any checkpoint id and that it is not
  * called for a deliberately failed checkpoint.
  *
- * <p>
- * The topology tested here includes a number of {@link OneInputStreamOperator}s and a
+ * <p>The topology tested here includes a number of {@link OneInputStreamOperator}s and a
  * {@link TwoInputStreamOperator}.
  *
- * <p>
- * Note that as a result of doing the checks on the task level there is no way to verify
- * that the {@link CheckpointNotifier#notifyCheckpointComplete(long)} is called for every
+ * <p>Note that as a result of doing the checks on the task level there is no way to verify
+ * that the {@link CheckpointListener#notifyCheckpointComplete(long)} is called for every
  * successfully completed checkpoint.
  */
 @SuppressWarnings("serial")
-public class StreamCheckpointNotifierITCase extends StreamFaultToleranceTestBase {
+public class StreamCheckpointNotifierITCase extends AbstractTestBase {
 
-	final long NUM_LONGS = 10_000_000L;
+	private static final Logger LOG = LoggerFactory.getLogger(StreamCheckpointNotifierITCase.class);
+
+	private static final int PARALLELISM = 4;
 
 	/**
-	 * Runs the following program:
-	 *
+	 * Runs the following program.
 	 * <pre>
 	 *     [ (source)->(filter) ] -> [ (co-map) ] -> [ (map) ] -> [ (groupBy/reduce)->(sink) ]
 	 * </pre>
 	 */
-	@Override
-	public void testProgram(StreamExecutionEnvironment env) {
+	@Test
+	public void testProgram() {
+		try {
+			final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+			assertEquals("test setup broken", PARALLELISM, env.getParallelism());
 
-		DataStream<Long> stream = env.addSource(new GeneratingSourceFunction(NUM_LONGS));
+			env.enableCheckpointing(500);
+			env.setRestartStrategy(RestartStrategies.fixedDelayRestart(Integer.MAX_VALUE, 0L));
 
-		stream
-				// -------------- first vertex, chained to the src ----------------
-				.filter(new LongRichFilterFunction())
+			final int numElements = 10000;
+			final int numTaskTotal = PARALLELISM * 5;
 
-				// -------------- second vertex, applying the co-map ----------------
-				.connect(stream).flatMap(new LeftIdentityCoRichFlatMapFunction())
+			DataStream<Long> stream = env.addSource(new GeneratingSourceFunction(numElements, numTaskTotal));
 
-				// -------------- third vertex - the stateful one that also fails ----------------
-				.map(new IdentityMapFunction())
-				.startNewChain()
+			stream
+					// -------------- first vertex, chained to the src ----------------
+					.filter(new LongRichFilterFunction())
 
-				// -------------- fourth vertex - reducer and the sink ----------------
-				.keyBy(0)
-				.reduce(new OnceFailingReducer(NUM_LONGS))
-				.addSink(new SinkFunction<Tuple1<Long>>() {
-					@Override
-					public void invoke(Tuple1<Long> value) {
-						// do nothing
-					}
-				});
-	}
+					// -------------- second vertex, applying the co-map ----------------
+					.connect(stream).flatMap(new LeftIdentityCoRichFlatMapFunction())
 
-	@Override
-	public void postSubmit() {
-		@SuppressWarnings({"unchecked", "rawtypes"})
-		List<Long>[][] checkList = new List[][] {
-				GeneratingSourceFunction.completedCheckpoints,
-				IdentityMapFunction.completedCheckpoints,
-				LongRichFilterFunction.completedCheckpoints,
-				LeftIdentityCoRichFlatMapFunction.completedCheckpoints};
+					// -------------- third vertex - the stateful one that also fails ----------------
+					.map(new IdentityMapFunction())
+					.startNewChain()
 
-		long failureCheckpointID = OnceFailingReducer.failureCheckpointID;
+					// -------------- fourth vertex - reducer and the sink ----------------
+					.keyBy(0)
+					.reduce(new OnceFailingReducer(numElements))
 
-		for(List<Long>[] parallelNotifications : checkList) {
-			for (int i = 0; i < PARALLELISM; i++){
-				List<Long> notifications = parallelNotifications[i];
-				assertTrue("No checkpoint notification was received.",
+					.addSink(new DiscardingSink<Tuple1<Long>>());
+
+			env.execute();
+
+			final long failureCheckpointID = OnceFailingReducer.failureCheckpointID;
+			assertNotEquals(0L, failureCheckpointID);
+
+			List<List<Long>[]> allLists = Arrays.asList(
+				GeneratingSourceFunction.COMPLETED_CHECKPOINTS,
+				LongRichFilterFunction.COMPLETED_CHECKPOINTS,
+				LeftIdentityCoRichFlatMapFunction.COMPLETED_CHECKPOINTS,
+				IdentityMapFunction.COMPLETED_CHECKPOINTS,
+				OnceFailingReducer.COMPLETED_CHECKPOINTS
+			);
+
+			for (List<Long>[] parallelNotifications : allLists) {
+				for (List<Long> notifications : parallelNotifications) {
+
+					assertTrue("No checkpoint notification was received.",
 						notifications.size() > 0);
-				assertFalse("Failure checkpoint was marked as completed.",
+
+					assertFalse("Failure checkpoint was marked as completed.",
 						notifications.contains(failureCheckpointID));
-				assertFalse("No checkpoint received before failure.",
-						notifications.get(0) == failureCheckpointID);
-				assertFalse("No checkpoint received after failure.",
+
+					assertFalse("No checkpoint received after failure.",
 						notifications.get(notifications.size() - 1) == failureCheckpointID);
-				assertTrue("Checkpoint notification was received multiple times",
+
+					assertTrue("Checkpoint notification was received multiple times",
 						notifications.size() == new HashSet<Long>(notifications).size());
+				}
 			}
 		}
+		catch (Exception e) {
+			e.printStackTrace();
+			fail(e.getMessage());
+		}
+	}
+
+	static List<Long>[] createCheckpointLists(int parallelism) {
+		@SuppressWarnings({"unchecked", "rawtypes"})
+		List<Long>[] lists = new List[parallelism];
+		for (int i = 0; i < parallelism; i++) {
+			lists[i] = new ArrayList<>();
+		}
+		return lists;
 	}
 
 	// --------------------------------------------------------------------------------------------
@@ -131,44 +162,40 @@ public class StreamCheckpointNotifierITCase extends StreamFaultToleranceTestBase
 	// --------------------------------------------------------------------------------------------
 
 	/**
-	 * Generates some Long values and as an implementation for the {@link CheckpointNotifier}
+	 * Generates some Long values and as an implementation for the {@link CheckpointListener}
 	 * interface it stores all the checkpoint ids it has seen in a static list.
 	 */
 	private static class GeneratingSourceFunction extends RichSourceFunction<Long>
-			implements ParallelSourceFunction<Long>, CheckpointNotifier, Checkpointed<Integer> {
+			implements ParallelSourceFunction<Long>, CheckpointListener, ListCheckpointed<Integer> {
 
-		@SuppressWarnings({"unchecked", "rawtypes"})
-		static List<Long>[] completedCheckpoints = new List[PARALLELISM];
-		
+		static final List<Long>[] COMPLETED_CHECKPOINTS = createCheckpointLists(PARALLELISM);
+
+		static AtomicLong numPostFailureNotifications = new AtomicLong();
 
 		// operator behaviour
 		private final long numElements;
-		private long result;
+
+		private final int notificationsToWaitFor;
 
 		private int index;
 		private int step;
 
-		// test behaviour
-		private int subtaskId;
+		private volatile boolean notificationAlready;
 
 		private volatile boolean isRunning = true;
 
-		GeneratingSourceFunction(long numElements) {
+		GeneratingSourceFunction(long numElements, int notificationsToWaitFor) {
 			this.numElements = numElements;
+			this.notificationsToWaitFor = notificationsToWaitFor;
 		}
 
 		@Override
 		public void open(Configuration parameters) throws IOException {
 			step = getRuntimeContext().getNumberOfParallelSubtasks();
-			subtaskId = getRuntimeContext().getIndexOfThisSubtask();
-			
-			if (index == 0) {
-				index = subtaskId;
-			}
 
-			// Create a collection on the first open
-			if (completedCheckpoints[subtaskId] == null) {
-				completedCheckpoints[subtaskId] = new ArrayList<>();
+			// if index has been restored, it is not 0 any more
+			if (index == 0) {
+				index = getRuntimeContext().getIndexOfThisSubtask();
 			}
 		}
 
@@ -177,13 +204,18 @@ public class StreamCheckpointNotifierITCase extends StreamFaultToleranceTestBase
 			final Object lockingObject = ctx.getCheckpointLock();
 
 			while (isRunning && index < numElements) {
-
-				result = index % 10;
+				long result = index % 10;
 
 				synchronized (lockingObject) {
 					index += step;
 					ctx.collect(result);
 				}
+			}
+
+			// if the program goes fast and no notifications come through, we
+			// wait until all tasks had a chance to see a notification
+			while (isRunning && numPostFailureNotifications.get() < notificationsToWaitFor) {
+				Thread.sleep(50);
 			}
 		}
 
@@ -193,32 +225,43 @@ public class StreamCheckpointNotifierITCase extends StreamFaultToleranceTestBase
 		}
 
 		@Override
-		public void notifyCheckpointComplete(long checkpointId) throws Exception {
-			completedCheckpoints[subtaskId].add(checkpointId);
+		public List<Integer> snapshotState(long checkpointId, long timestamp) throws Exception {
+			return Collections.singletonList(this.index);
 		}
 
 		@Override
-		public Integer snapshotState(long checkpointId, long checkpointTimestamp) {
-			return index;
+		public void restoreState(List<Integer> state) throws Exception {
+			if (state.isEmpty() || state.size() > 1) {
+				throw new RuntimeException("Test failed due to unexpected recovered state size " + state.size());
+			}
+			this.index = state.get(0);
 		}
 
 		@Override
-		public void restoreState(Integer state) {
-			index = state;
+		public void notifyCheckpointComplete(long checkpointId) {
+			// record the ID of the completed checkpoint
+			int partition = getRuntimeContext().getIndexOfThisSubtask();
+			COMPLETED_CHECKPOINTS[partition].add(checkpointId);
+
+			// if this is the first time we get a notification since the failure,
+			// tell the source function
+			if (OnceFailingReducer.hasFailed && !notificationAlready) {
+				notificationAlready = true;
+				GeneratingSourceFunction.numPostFailureNotifications.incrementAndGet();
+			}
 		}
 	}
 
 	/**
 	 * Identity transform on Long values wrapping the output in a tuple. As an implementation
-	 * for the {@link CheckpointNotifier} interface it stores all the checkpoint ids it has seen in a static list.
+	 * for the {@link CheckpointListener} interface it stores all the checkpoint ids it has seen in a static list.
 	 */
 	private static class IdentityMapFunction extends RichMapFunction<Long, Tuple1<Long>>
-			implements CheckpointNotifier {
+			implements CheckpointListener {
 
-		@SuppressWarnings({"unchecked", "rawtypes"})
-		public static List<Long>[] completedCheckpoints = new List[PARALLELISM];
-		
-		private int subtaskId;
+		static final List<Long>[] COMPLETED_CHECKPOINTS = createCheckpointLists(PARALLELISM);
+
+		private volatile boolean notificationAlready;
 
 		@Override
 		public Tuple1<Long> map(Long value) throws Exception {
@@ -226,83 +269,30 @@ public class StreamCheckpointNotifierITCase extends StreamFaultToleranceTestBase
 		}
 
 		@Override
-		public void open(Configuration conf) throws IOException {
-			subtaskId = getRuntimeContext().getIndexOfThisSubtask();
+		public void notifyCheckpointComplete(long checkpointId) {
+			// record the ID of the completed checkpoint
+			int partition = getRuntimeContext().getIndexOfThisSubtask();
+			COMPLETED_CHECKPOINTS[partition].add(checkpointId);
 
-			// Create a collection on the first open
-			if (completedCheckpoints[subtaskId] == null) {
-				completedCheckpoints[subtaskId] = new ArrayList<>();
+			// if this is the first time we get a notification since the failure,
+			// tell the source function
+			if (OnceFailingReducer.hasFailed && !notificationAlready) {
+				notificationAlready = true;
+				GeneratingSourceFunction.numPostFailureNotifications.incrementAndGet();
 			}
-		}
-
-		@Override
-		public void notifyCheckpointComplete(long checkpointId) throws Exception {
-			completedCheckpoints[subtaskId].add(checkpointId);
-		}
-	}
-
-	/**
-	 * Reducer that causes one failure between seeing 40% to 70% of the records.
-	 */
-	private static class OnceFailingReducer extends RichReduceFunction<Tuple1<Long>> implements Checkpointed<Long> {
-
-		private static volatile boolean hasFailed = false;
-		public static volatile long failureCheckpointID;
-
-		private final long numElements;
-
-		private long failurePos;
-		private long count;
-
-
-		OnceFailingReducer(long numElements) {
-			this.numElements = numElements;
-		}
-
-		@Override
-		public void open(Configuration parameters) {
-			long failurePosMin = (long) (0.4 * numElements / getRuntimeContext().getNumberOfParallelSubtasks());
-			long failurePosMax = (long) (0.7 * numElements / getRuntimeContext().getNumberOfParallelSubtasks());
-
-			failurePos = (new Random().nextLong() % (failurePosMax - failurePosMin)) + failurePosMin;
-			count = 0;
-		}
-
-		@Override
-		public Tuple1<Long> reduce(Tuple1<Long> value1, Tuple1<Long> value2) throws Exception {
-			count++;
-			value1.f0 += value2.f0;
-			return value1;
-		}
-
-		@Override
-		public Long snapshotState(long checkpointId, long checkpointTimestamp) throws Exception {
-			if (!hasFailed && count >= failurePos) {
-				hasFailed = true;
-				failureCheckpointID = checkpointId;
-				throw new Exception("Test Failure");
-			}
-			return count;
-		}
-
-		@Override
-		public void restoreState(Long state) {
-			count = state;
 		}
 	}
 
 	/**
 	 * Filter on Long values supposedly letting all values through. As an implementation
-	 * for the {@link CheckpointNotifier} interface it stores all the checkpoint ids
+	 * for the {@link CheckpointListener} interface it stores all the checkpoint ids
 	 * it has seen in a static list.
 	 */
-	private static class LongRichFilterFunction extends RichFilterFunction<Long>
-			implements CheckpointNotifier {
+	private static class LongRichFilterFunction extends RichFilterFunction<Long> implements CheckpointListener {
 
-		@SuppressWarnings({"unchecked", "rawtypes"})
-		static List<Long>[] completedCheckpoints = new List[PARALLELISM];
-		
-		private int subtaskId;
+		static final List<Long>[] COMPLETED_CHECKPOINTS = createCheckpointLists(PARALLELISM);
+
+		private volatile boolean notificationAlready;
 
 		@Override
 		public boolean filter(Long value) {
@@ -310,56 +300,119 @@ public class StreamCheckpointNotifierITCase extends StreamFaultToleranceTestBase
 		}
 
 		@Override
-		public void open(Configuration conf) throws IOException {
-			subtaskId = getRuntimeContext().getIndexOfThisSubtask();
+		public void notifyCheckpointComplete(long checkpointId) {
+			// record the ID of the completed checkpoint
+			int partition = getRuntimeContext().getIndexOfThisSubtask();
+			COMPLETED_CHECKPOINTS[partition].add(checkpointId);
 
-			// Create a collection on the first open
-			if (completedCheckpoints[subtaskId] == null) {
-				completedCheckpoints[subtaskId] = new ArrayList<>();
+			// if this is the first time we get a notification since the failure,
+			// tell the source function
+			if (OnceFailingReducer.hasFailed && !notificationAlready) {
+				notificationAlready = true;
+				GeneratingSourceFunction.numPostFailureNotifications.incrementAndGet();
 			}
-		}
-
-		@Override
-		public void notifyCheckpointComplete(long checkpointId) throws Exception {
-			completedCheckpoints[subtaskId].add(checkpointId);
 		}
 	}
 
 	/**
 	 * CoFlatMap on Long values as identity transform on the left input, while ignoring the right.
-	 * As an implementation for the {@link CheckpointNotifier} interface it stores all the checkpoint
+	 * As an implementation for the {@link CheckpointListener} interface it stores all the checkpoint
 	 * ids it has seen in a static list.
 	 */
 	private static class LeftIdentityCoRichFlatMapFunction extends RichCoFlatMapFunction<Long, Long, Long>
-			implements CheckpointNotifier {
+			implements CheckpointListener {
 
-		@SuppressWarnings({"unchecked", "rawtypes"})
-		public static List<Long>[] completedCheckpoints = new List[PARALLELISM];
-		private int subtaskId;
+		static final List<Long>[] COMPLETED_CHECKPOINTS = createCheckpointLists(PARALLELISM);
 
-		@Override
-		public void open(Configuration conf) throws IOException {
-			subtaskId = getRuntimeContext().getIndexOfThisSubtask();
-
-			// Create a collection on the first open
-			if (completedCheckpoints[subtaskId] == null) {
-				completedCheckpoints[subtaskId] = new ArrayList<>();
-			}
-		}
+		private volatile boolean notificationAlready;
 
 		@Override
-		public void flatMap1(Long value, Collector<Long> out) throws IOException {
+		public void flatMap1(Long value, Collector<Long> out) {
 			out.collect(value);
 		}
 
 		@Override
-		public void flatMap2(Long value, Collector<Long> out) throws IOException {
+		public void flatMap2(Long value, Collector<Long> out) {
 			// we ignore the values from the second input
 		}
 
 		@Override
-		public void notifyCheckpointComplete(long checkpointId) throws Exception {
-			completedCheckpoints[subtaskId].add(checkpointId);
+		public void notifyCheckpointComplete(long checkpointId) {
+			// record the ID of the completed checkpoint
+			int partition = getRuntimeContext().getIndexOfThisSubtask();
+			COMPLETED_CHECKPOINTS[partition].add(checkpointId);
+
+			// if this is the first time we get a notification since the failure,
+			// tell the source function
+			if (OnceFailingReducer.hasFailed && !notificationAlready) {
+				notificationAlready = true;
+				GeneratingSourceFunction.numPostFailureNotifications.incrementAndGet();
+			}
+		}
+	}
+
+	/**
+	 * Reducer that causes one failure between seeing 40% to 70% of the records.
+	 */
+	private static class OnceFailingReducer extends RichReduceFunction<Tuple1<Long>>
+		implements ListCheckpointed<Long>, CheckpointListener {
+		static volatile boolean hasFailed = false;
+		static volatile long failureCheckpointID;
+
+		static final List<Long>[] COMPLETED_CHECKPOINTS = createCheckpointLists(PARALLELISM);
+
+		private final long failurePos;
+
+		private volatile long count;
+
+		private volatile boolean notificationAlready;
+
+		OnceFailingReducer(long numElements) {
+			this.failurePos = (long) (0.5 * numElements / PARALLELISM);
+		}
+
+		@Override
+		public Tuple1<Long> reduce(Tuple1<Long> value1, Tuple1<Long> value2) {
+			count++;
+			if (count >= failurePos && getRuntimeContext().getIndexOfThisSubtask() == 0) {
+				LOG.info(">>>>>>>>>>>>>>>>> Reached failing position <<<<<<<<<<<<<<<<<<<<<");
+			}
+
+			value1.f0 += value2.f0;
+			return value1;
+		}
+
+		@Override
+		public List<Long> snapshotState(long checkpointId, long timestamp) throws Exception {
+			if (!hasFailed && count >= failurePos && getRuntimeContext().getIndexOfThisSubtask() == 0) {
+				LOG.info(">>>>>>>>>>>>>>>>> Throwing Exception <<<<<<<<<<<<<<<<<<<<<");
+				hasFailed = true;
+				failureCheckpointID = checkpointId;
+				throw new Exception("Test Failure");
+			}
+			return Collections.singletonList(this.count);
+		}
+
+		@Override
+		public void restoreState(List<Long> state) throws Exception {
+			if (state.isEmpty() || state.size() > 1) {
+				throw new RuntimeException("Test failed due to unexpected recovered state size " + state.size());
+			}
+			this.count = state.get(0);
+		}
+
+		@Override
+		public void notifyCheckpointComplete(long checkpointId) {
+			// record the ID of the completed checkpoint
+			int partition = getRuntimeContext().getIndexOfThisSubtask();
+			COMPLETED_CHECKPOINTS[partition].add(checkpointId);
+
+			// if this is the first time we get a notification since the failure,
+			// tell the source function
+			if (OnceFailingReducer.hasFailed && !notificationAlready) {
+				notificationAlready = true;
+				GeneratingSourceFunction.numPostFailureNotifications.incrementAndGet();
+			}
 		}
 	}
 }

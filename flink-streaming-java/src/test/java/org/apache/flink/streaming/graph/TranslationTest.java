@@ -24,20 +24,23 @@ import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.SinkFunction;
 import org.apache.flink.streaming.api.graph.StreamConfig;
 
-import org.apache.flink.streaming.util.StreamingMultipleProgramsTestBase;
 import org.junit.Test;
 
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.fail;
 
+/**
+ * Test translation of {@link CheckpointingMode}.
+ */
 @SuppressWarnings("serial")
-public class TranslationTest extends StreamingMultipleProgramsTestBase {
-	
+public class TranslationTest {
+
 	@Test
 	public void testCheckpointModeTranslation() {
 		try {
 			// with deactivated fault tolerance, the checkpoint mode should be at-least-once
 			StreamExecutionEnvironment deactivated = getSimpleJob();
-			
+
 			for (JobVertex vertex : deactivated.getStreamGraph().getJobGraph().getVertices()) {
 				assertEquals(CheckpointingMode.AT_LEAST_ONCE, new StreamConfig(vertex.getConfiguration()).getCheckpointMode());
 			}
@@ -61,7 +64,7 @@ public class TranslationTest extends StreamingMultipleProgramsTestBase {
 			fail(e.getMessage());
 		}
 	}
-	
+
 	private static StreamExecutionEnvironment getSimpleJob() {
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 		env.generateSequence(1, 10000000)
@@ -70,7 +73,7 @@ public class TranslationTest extends StreamingMultipleProgramsTestBase {
 					public void invoke(Long value) {
 					}
 				});
-		
+
 		return env;
 	}
 }

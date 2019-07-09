@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.util.Arrays;
 
 import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.api.common.typeutils.TypeSerializerConfigSnapshot;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
 
@@ -109,22 +110,16 @@ public class IntListSerializer extends TypeSerializer<IntList> {
 
 	@Override
 	public boolean equals(Object obj) {
-		if (obj instanceof IntListSerializer) {
-			IntListSerializer other = (IntListSerializer) obj;
-
-			return other.canEqual(this);
-		} else {
-			return false;
-		}
-	}
-
-	@Override
-	public boolean canEqual(Object obj) {
 		return obj instanceof IntListSerializer;
 	}
 
 	@Override
 	public int hashCode() {
 		return IntListSerializer.class.hashCode();
+	}
+
+	@Override
+	public TypeSerializerConfigSnapshot<IntList> snapshotConfiguration() {
+		throw new UnsupportedOperationException();
 	}
 }

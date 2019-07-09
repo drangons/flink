@@ -18,35 +18,45 @@
 
 package org.apache.flink.api.common.functions.util;
 
+import org.apache.flink.annotation.Internal;
+import org.apache.flink.api.common.ExecutionConfig;
+import org.apache.flink.api.common.TaskInfo;
+import org.apache.flink.api.common.accumulators.Accumulator;
+import org.apache.flink.api.common.functions.BroadcastVariableInitializer;
+import org.apache.flink.api.common.functions.RuntimeContext;
+import org.apache.flink.core.fs.Path;
+import org.apache.flink.metrics.MetricGroup;
+
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Future;
 
-import org.apache.flink.api.common.ExecutionConfig;
-import org.apache.flink.api.common.accumulators.Accumulator;
-import org.apache.flink.api.common.functions.BroadcastVariableInitializer;
-import org.apache.flink.api.common.functions.RuntimeContext;
-import org.apache.flink.core.fs.Path;
-
 /**
  * A standalone implementation of the {@link RuntimeContext}, created by runtime UDF operators.
  */
+@Internal
 public class RuntimeUDFContext extends AbstractRuntimeUDFContext {
 
-	private final HashMap<String, Object> initializedBroadcastVars = new HashMap<String, Object>();
-	
-	private final HashMap<String, List<?>> uninitializedBroadcastVars = new HashMap<String, List<?>>();
+	private final HashMap<String, Object> initializedBroadcastVars = new HashMap<>();
 
-	public RuntimeUDFContext(String name, int numParallelSubtasks, int subtaskIndex, ClassLoader userCodeClassLoader,
-							ExecutionConfig executionConfig, Map<String, Future<Path>> cpTasks, Map<String, Accumulator<?,?>> accumulators) {
-		super(name, numParallelSubtasks, subtaskIndex, userCodeClassLoader, executionConfig, accumulators, cpTasks);
+	private final HashMap<String, List<?>> uninitializedBroadcastVars = new HashMap<>();
+
+	public RuntimeUDFContext(TaskInfo taskInfo, ClassLoader userCodeClassLoader, ExecutionConfig executionConfig,
+								Map<String, Future<Path>> cpTasks, Map<String, Accumulator<?, ?>> accumulators,
+								MetricGroup metrics) {
+		super(taskInfo, userCodeClassLoader, executionConfig, accumulators, cpTasks, metrics);
+	}
+
+	@Override
+	public boolean hasBroadcastVariable(String name) {
+		return this.initializedBroadcastVars.containsKey(name) || this.uninitializedBroadcastVars.containsKey(name);
 	}
 
 	@Override
 	@SuppressWarnings("unchecked")
 	public <RT> List<RT> getBroadcastVariable(String name) {
-		
+
 		// check if we have an initialized version
 		Object o = this.initializedBroadcastVars.get(name);
 		if (o != null) {
@@ -54,7 +64,7 @@ public class RuntimeUDFContext extends AbstractRuntimeUDFContext {
 				return (List<RT>) o;
 			}
 			else {
-				throw new IllegalStateException("The broadcast variable with name '" + name + 
+				throw new IllegalStateException("The broadcast variable with name '" + name +
 						"' is not a List. A different call must have requested this variable with a BroadcastVariableInitializer.");
 			}
 		}
@@ -69,11 +79,11 @@ public class RuntimeUDFContext extends AbstractRuntimeUDFContext {
 			}
 		}
 	}
-	
+
 	@SuppressWarnings("unchecked")
 	@Override
 	public <T, C> C getBroadcastVariableWithInitializer(String name, BroadcastVariableInitializer<T, C> initializer) {
-		
+
 		// check if we have an initialized version
 		Object o = this.initializedBroadcastVars.get(name);
 		if (o != null) {
@@ -91,19 +101,19 @@ public class RuntimeUDFContext extends AbstractRuntimeUDFContext {
 			}
 		}
 	}
-	
+
 	// --------------------------------------------------------------------------------------------
-	
+
 	public void setBroadcastVariable(String name, List<?> value) {
 		this.uninitializedBroadcastVars.put(name, value);
 		this.initializedBroadcastVars.remove(name);
 	}
-	
+
 	public void clearBroadcastVariable(String name) {
 		this.uninitializedBroadcastVars.remove(name);
 		this.initializedBroadcastVars.remove(name);
 	}
-	
+
 	public void clearAllBroadcastVariables() {
 		this.uninitializedBroadcastVars.clear();
 		this.initializedBroadcastVars.clear();

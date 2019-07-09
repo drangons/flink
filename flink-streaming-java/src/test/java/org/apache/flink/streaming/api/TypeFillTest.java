@@ -17,70 +17,118 @@
 
 package org.apache.flink.streaming.api;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.fail;
-
-
 import org.apache.flink.api.common.functions.FlatMapFunction;
 import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
+import org.apache.flink.api.common.typeinfo.TypeHint;
+import org.apache.flink.api.common.typeinfo.Types;
+import org.apache.flink.api.java.functions.KeySelector;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.co.CoFlatMapFunction;
 import org.apache.flink.streaming.api.functions.co.CoMapFunction;
+import org.apache.flink.streaming.api.functions.co.ProcessJoinFunction;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
-import org.apache.flink.streaming.util.StreamingMultipleProgramsTestBase;
+import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.util.Collector;
+
 import org.junit.Test;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.fail;
+
+/**
+ * Tests for handling missing type information either by calling {@code returns()} or having an
+ * explicit type information parameter.
+ */
 @SuppressWarnings("serial")
-public class TypeFillTest extends StreamingMultipleProgramsTestBase {
+public class TypeFillTest {
 
 	@Test
 	public void test() {
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+		env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
 
 		try {
 			env.addSource(new TestSource<Integer>()).print();
 			fail();
-		} catch (Exception e) {
-		}
+		} catch (Exception ignored) {}
 
 		DataStream<Long> source = env.generateSequence(1, 10);
 
 		try {
 			source.map(new TestMap<Long, Long>()).print();
 			fail();
-		} catch (Exception e) {
-		}
+		} catch (Exception ignored) {}
+
 		try {
 			source.flatMap(new TestFlatMap<Long, Long>()).print();
 			fail();
-		} catch (Exception e) {
-		}
+		} catch (Exception ignored) {}
+
 		try {
 			source.connect(source).map(new TestCoMap<Long, Long, Integer>()).print();
 			fail();
-		} catch (Exception e) {
-		}
+		} catch (Exception ignored) {}
+
 		try {
 			source.connect(source).flatMap(new TestCoFlatMap<Long, Long, Integer>()).print();
 			fail();
-		} catch (Exception e) {
-		}
+		} catch (Exception ignored) {}
 
-		env.addSource(new TestSource<Integer>()).returns("Integer");
+		try {
+			source.keyBy(new TestKeySelector<Long, String>()).print();
+			fail();
+		} catch (Exception ignored) {}
+
+		try {
+			source.connect(source).keyBy(new TestKeySelector<Long, String>(), new TestKeySelector<>());
+			fail();
+		} catch (Exception ignored) {}
+
+		try {
+			source.coGroup(source).where(new TestKeySelector<>()).equalTo(new TestKeySelector<>());
+			fail();
+		} catch (Exception ignored) {}
+
+		try {
+			source.join(source).where(new TestKeySelector<>()).equalTo(new TestKeySelector<>());
+			fail();
+		} catch (Exception ignored) {}
+
+		try {
+			source.keyBy((in) -> in)
+				.intervalJoin(source.keyBy((in) -> in))
+				.between(Time.milliseconds(10L), Time.milliseconds(10L))
+				.process(new TestProcessJoinFunction<>())
+				.print();
+			fail();
+		} catch (Exception ignored) {}
+
+		env.addSource(new TestSource<Integer>()).returns(Integer.class);
 		source.map(new TestMap<Long, Long>()).returns(Long.class).print();
-		source.flatMap(new TestFlatMap<Long, Long>()).returns("Long").print();
-		source.connect(source).map(new TestCoMap<Long, Long, Integer>()).returns("Integer").print();
+		source.flatMap(new TestFlatMap<Long, Long>()).returns(new TypeHint<Long>(){}).print();
+		source.connect(source).map(new TestCoMap<Long, Long, Integer>()).returns(BasicTypeInfo.INT_TYPE_INFO).print();
 		source.connect(source).flatMap(new TestCoFlatMap<Long, Long, Integer>())
 				.returns(BasicTypeInfo.INT_TYPE_INFO).print();
-		
+		source.connect(source).keyBy(new TestKeySelector<>(), new TestKeySelector<>(), Types.STRING);
+		source.coGroup(source).where(new TestKeySelector<>(), Types.STRING).equalTo(new TestKeySelector<>(), Types.STRING);
+		source.join(source).where(new TestKeySelector<>(), Types.STRING).equalTo(new TestKeySelector<>(), Types.STRING);
+		source.keyBy((in) -> in)
+			.intervalJoin(source.keyBy((in) -> in))
+			.between(Time.milliseconds(10L), Time.milliseconds(10L))
+			.process(new TestProcessJoinFunction<Long, Long, String>())
+			.returns(Types.STRING);
+		source.keyBy((in) -> in)
+			.intervalJoin(source.keyBy((in) -> in))
+			.between(Time.milliseconds(10L), Time.milliseconds(10L))
+			.process(new TestProcessJoinFunction<>(), Types.STRING);
+
 		assertEquals(BasicTypeInfo.LONG_TYPE_INFO,
 				source.map(new TestMap<Long, Long>()).returns(Long.class).getType());
 
-		SingleOutputStreamOperator<String, ?> map = source.map(new MapFunction<Long, String>() {
+		SingleOutputStreamOperator<String> map = source.map(new MapFunction<Long, String>() {
 
 			@Override
 			public String map(Long value) throws Exception {
@@ -90,41 +138,35 @@ public class TypeFillTest extends StreamingMultipleProgramsTestBase {
 
 		map.print();
 		try {
-			map.returns("String");
+			map.returns(String.class);
 			fail();
-		} catch (Exception e) {
-		}
+		} catch (Exception ignored) {}
 
 	}
 
-	private class TestSource<T> implements SourceFunction<T> {
+	private static class TestSource<T> implements SourceFunction<T> {
 		private static final long serialVersionUID = 1L;
 
 		@Override
-		public void run(SourceContext<T> ctx) throws Exception {
-
-		}
+		public void run(SourceContext<T> ctx) throws Exception {}
 
 		@Override
-		public void cancel() {
-
-		}
+		public void cancel() {}
 	}
 
-	private class TestMap<T, O> implements MapFunction<T, O> {
+	private static class TestMap<T, O> implements MapFunction<T, O> {
 		@Override
 		public O map(T value) throws Exception {
 			return null;
 		}
 	}
 
-	private class TestFlatMap<T, O> implements FlatMapFunction<T, O> {
+	private static class TestFlatMap<T, O> implements FlatMapFunction<T, O> {
 		@Override
-		public void flatMap(T value, Collector<O> out) throws Exception {
-		}
+		public void flatMap(T value, Collector<O> out) throws Exception {}
 	}
 
-	private class TestCoMap<IN1, IN2, OUT> implements CoMapFunction<IN1, IN2, OUT> {
+	private static class TestCoMap<IN1, IN2, OUT> implements CoMapFunction<IN1, IN2, OUT> {
 
 		@Override
 		public OUT map1(IN1 value) {
@@ -138,15 +180,29 @@ public class TypeFillTest extends StreamingMultipleProgramsTestBase {
 
 	}
 
-	private class TestCoFlatMap<IN1, IN2, OUT> implements CoFlatMapFunction<IN1, IN2, OUT> {
+	private static class TestCoFlatMap<IN1, IN2, OUT> implements CoFlatMapFunction<IN1, IN2, OUT> {
 
 		@Override
-		public void flatMap1(IN1 value, Collector<OUT> out) throws Exception {
-		}
+		public void flatMap1(IN1 value, Collector<OUT> out) throws Exception {}
 
 		@Override
-		public void flatMap2(IN2 value, Collector<OUT> out) throws Exception {
-		}
+		public void flatMap2(IN2 value, Collector<OUT> out) throws Exception {}
 
+	}
+
+	private static class TestKeySelector<IN, KEY> implements KeySelector<IN, KEY> {
+
+		@Override
+		public KEY getKey(IN value) throws Exception {
+			return null;
+		}
+	}
+
+	private static class TestProcessJoinFunction<IN1, IN2, OUT> extends ProcessJoinFunction<IN1, IN2, OUT> {
+
+		@Override
+		public void processElement(IN1 left, IN2 right, Context ctx, Collector<OUT> out) throws Exception {
+			// nothing to do
+		}
 	}
 }

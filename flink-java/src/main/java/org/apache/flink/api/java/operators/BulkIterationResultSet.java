@@ -18,10 +18,16 @@
 
 package org.apache.flink.api.java.operators;
 
+import org.apache.flink.annotation.Internal;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.java.DataSet;
 import org.apache.flink.api.java.ExecutionEnvironment;
 
+/**
+ * Resulting {@link DataSet} of bulk iterations.
+ * @param <T>
+ */
+@Internal
 public class BulkIterationResultSet<T> extends DataSet<T> {
 
 	private final IterativeDataSet<T> iterationHead;
@@ -39,8 +45,7 @@ public class BulkIterationResultSet<T> extends DataSet<T> {
 
 	BulkIterationResultSet(ExecutionEnvironment context,
 		TypeInformation<T> type, IterativeDataSet<T> iterationHead,
-		DataSet<T> nextPartialSolution, DataSet<?> terminationCriterion)
-	{
+		DataSet<T> nextPartialSolution, DataSet<?> terminationCriterion) {
 		super(context, type);
 		this.iterationHead = iterationHead;
 		this.nextPartialSolution = nextPartialSolution;

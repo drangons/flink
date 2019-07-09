@@ -19,20 +19,8 @@
 
 package org.apache.flink.runtime.operators;
 
-import java.io.BufferedWriter;
-import java.io.File;
-import java.io.FileWriter;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-
 import org.apache.flink.api.common.io.DelimitedInputFormat;
-import org.apache.flink.runtime.io.network.api.writer.ResultPartitionWriter;
-import org.apache.flink.runtime.taskmanager.Task;
-import org.junit.Assert;
-
+import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.runtime.operators.testutils.NirvanaOutputList;
 import org.apache.flink.runtime.operators.testutils.TaskCancelThread;
 import org.apache.flink.runtime.operators.testutils.TaskTestBase;
@@ -40,15 +28,27 @@ import org.apache.flink.runtime.operators.testutils.UniformRecordGenerator;
 import org.apache.flink.types.IntValue;
 import org.apache.flink.types.Record;
 import org.apache.flink.util.MutableObjectIterator;
-import org.junit.After;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.powermock.core.classloader.annotations.PrepareForTest;
-import org.powermock.modules.junit4.PowerMockRunner;
 
-@RunWith(PowerMockRunner.class)
-@PrepareForTest({Task.class, ResultPartitionWriter.class})
+import org.junit.Assert;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
+
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.lang.reflect.Field;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.UUID;
+
 public class DataSourceTaskTest extends TaskTestBase {
+
+	@Rule
+	public TemporaryFolder tempFolder = new TemporaryFolder();
 
 	private static final int MEMORY_MANAGER_SIZE = 1024 * 1024;
 
@@ -56,36 +56,22 @@ public class DataSourceTaskTest extends TaskTestBase {
 
 	private List<Record> outList;
 	
-	private String tempTestPath = DataSinkTaskTest.constructTestPath(DataSourceTaskTest.class, "dst_test");
-	
-	@After
-	public void cleanUp() {
-		File tempTestFile = new File(this.tempTestPath);
-		if(tempTestFile.exists()) {
-			tempTestFile.delete();
-		}
-	}
-	
 	@Test
-	public void testDataSourceTask() {
+	public void testDataSourceTask() throws IOException {
 		int keyCnt = 100;
 		int valCnt = 20;
 		
 		this.outList = new ArrayList<Record>();
-		
-		try {
-			InputFilePreparator.prepareInputFile(new UniformRecordGenerator(keyCnt, valCnt, false), 
-				this.tempTestPath, true);
-		} catch (IOException e1) {
-			Assert.fail("Unable to set-up test input file");
-		}
+		File tempTestFile = new File(tempFolder.getRoot(), UUID.randomUUID().toString());
+		InputFilePreparator.prepareInputFile(new UniformRecordGenerator(keyCnt, valCnt, false),
+			tempTestFile, true);
 		
 		super.initEnvironment(MEMORY_MANAGER_SIZE, NETWORK_BUFFER_SIZE);
 		super.addOutput(this.outList);
 		
-		DataSourceTask<Record> testTask = new DataSourceTask<>();
-		
-		super.registerFileInputTask(testTask, MockInputFormat.class, new File(tempTestPath).toURI().toString(), "\n");
+		DataSourceTask<Record> testTask = new DataSourceTask<>(this.mockEnv);
+
+		super.registerFileInputTask(testTask, MockInputFormat.class, tempTestFile.toURI().toString(), "\n");
 		
 		try {
 			testTask.invoke();
@@ -94,7 +80,18 @@ public class DataSourceTaskTest extends TaskTestBase {
 			Assert.fail("Invoke method caused exception.");
 		}
 		
-		Assert.assertTrue("Invalid output size. Expected: "+(keyCnt*valCnt)+" Actual: "+this.outList.size(),
+		try {
+			Field formatField = DataSourceTask.class.getDeclaredField("format");
+			formatField.setAccessible(true);
+			MockInputFormat inputFormat = (MockInputFormat) formatField.get(testTask);
+			Assert.assertTrue("Invalid status of the input format. Expected for opened: true, Actual: " + inputFormat.opened, inputFormat.opened);
+			Assert.assertTrue("Invalid status of the input format. Expected for closed: true, Actual: " + inputFormat.closed, inputFormat.closed);
+		} catch (Exception e) {
+			System.err.println(e);
+			Assert.fail("Reflection error while trying to validate inputFormat status.");
+		}
+
+		Assert.assertTrue("Invalid output size. Expected: " + (keyCnt*valCnt) + " Actual: " + this.outList.size(),
 			this.outList.size() == keyCnt * valCnt);
 		
 		HashMap<Integer,HashSet<Integer>> keyValueCountMap = new HashMap<>(keyCnt);
@@ -122,25 +119,21 @@ public class DataSourceTaskTest extends TaskTestBase {
 	}
 	
 	@Test
-	public void testFailingDataSourceTask() {
+	public void testFailingDataSourceTask() throws IOException {
 		int keyCnt = 20;
 		int valCnt = 10;
 		
 		this.outList = new NirvanaOutputList();
-		
-		try {
-			InputFilePreparator.prepareInputFile(new UniformRecordGenerator(keyCnt, valCnt, false), 
-				this.tempTestPath, false);
-		} catch (IOException e1) {
-			Assert.fail("Unable to set-up test input file");
-		}
+		File tempTestFile = new File(tempFolder.getRoot(), UUID.randomUUID().toString());
+		InputFilePreparator.prepareInputFile(new UniformRecordGenerator(keyCnt, valCnt, false),
+			tempTestFile, false);
 
 		super.initEnvironment(MEMORY_MANAGER_SIZE, NETWORK_BUFFER_SIZE);
 		super.addOutput(this.outList);
 		
-		DataSourceTask<Record> testTask = new DataSourceTask<>();
+		DataSourceTask<Record> testTask = new DataSourceTask<>(this.mockEnv);
 
-		super.registerFileInputTask(testTask, MockFailingInputFormat.class, new File(tempTestPath).toURI().toString(), "\n");
+		super.registerFileInputTask(testTask, MockFailingInputFormat.class, tempTestFile.toURI().toString(), "\n");
 		
 		boolean stubFailed = false;
 
@@ -152,29 +145,24 @@ public class DataSourceTaskTest extends TaskTestBase {
 		Assert.assertTrue("Function exception was not forwarded.", stubFailed);
 		
 		// assert that temp file was created
-		File tempTestFile = new File(this.tempTestPath);
 		Assert.assertTrue("Temp output file does not exist",tempTestFile.exists());
 		
 	}
 	
 	@Test
-	public void testCancelDataSourceTask() {
+	public void testCancelDataSourceTask() throws IOException {
 		int keyCnt = 20;
 		int valCnt = 4;
 
 		super.initEnvironment(MEMORY_MANAGER_SIZE, NETWORK_BUFFER_SIZE);
 		super.addOutput(new NirvanaOutputList());
+		File tempTestFile = new File(tempFolder.getRoot(), UUID.randomUUID().toString());
+		InputFilePreparator.prepareInputFile(new UniformRecordGenerator(keyCnt, valCnt, false),
+			tempTestFile, false);
 		
-		try {
-			InputFilePreparator.prepareInputFile(new UniformRecordGenerator(keyCnt, valCnt, false), 
-				this.tempTestPath, false);
-		} catch (IOException e1) {
-			Assert.fail("Unable to set-up test input file");
-		}
-		
-		final DataSourceTask<Record> testTask = new DataSourceTask<>();
+		final DataSourceTask<Record> testTask = new DataSourceTask<>(this.mockEnv);
 
-		super.registerFileInputTask(testTask, MockDelayingInputFormat.class,  new File(tempTestPath).toURI().toString(), "\n");
+		super.registerFileInputTask(testTask, MockDelayingInputFormat.class,  tempTestFile.toURI().toString(), "\n");
 		
 		Thread taskRunner = new Thread() {
 			@Override
@@ -200,35 +188,32 @@ public class DataSourceTaskTest extends TaskTestBase {
 		}
 		
 		// assert that temp file was created
-		File tempTestFile = new File(this.tempTestPath);
 		Assert.assertTrue("Temp output file does not exist",tempTestFile.exists());
 	}
 
 	
 	private static class InputFilePreparator {
-		public static void prepareInputFile(MutableObjectIterator<Record> inIt, String inputFilePath, boolean insertInvalidData)
-		throws IOException
-		{
-			FileWriter fw = new FileWriter(inputFilePath);
-			BufferedWriter bw = new BufferedWriter(fw);
-			
-			if (insertInvalidData) {
-				bw.write("####_I_AM_INVALID_########\n");
+		public static void prepareInputFile(MutableObjectIterator<Record> inIt, File inputFile, boolean insertInvalidData)
+		throws IOException {
+
+			try (BufferedWriter bw = new BufferedWriter(new FileWriter(inputFile))) {
+				if (insertInvalidData) {
+					bw.write("####_I_AM_INVALID_########\n");
+				}
+
+				Record rec = new Record();
+				while ((rec = inIt.next(rec)) != null) {
+					IntValue key = rec.getField(0, IntValue.class);
+					IntValue value = rec.getField(1, IntValue.class);
+
+					bw.write(key.getValue() + "_" + value.getValue() + "\n");
+				}
+				if (insertInvalidData) {
+					bw.write("####_I_AM_INVALID_########\n");
+				}
+
+				bw.flush();
 			}
-			
-			Record rec = new Record();
-			while ((rec = inIt.next(rec)) != null) {
-				IntValue key = rec.getField(0, IntValue.class);
-				IntValue value = rec.getField(1, IntValue.class);
-				
-				bw.write(key.getValue() + "_" + value.getValue() + "\n");
-			}
-			if (insertInvalidData) {
-				bw.write("####_I_AM_INVALID_########\n");
-			}
-			
-			bw.flush();
-			bw.close();
 		}
 	}
 	
@@ -237,11 +222,14 @@ public class DataSourceTaskTest extends TaskTestBase {
 		
 		private final IntValue key = new IntValue();
 		private final IntValue value = new IntValue();
+
+		private boolean opened = false;
+		private boolean closed = false;
 		
 		@Override
 		public Record readRecord(Record target, byte[] record, int offset, int numBytes) {
 			
-			String line = new String(record, offset, numBytes);
+			String line = new String(record, offset, numBytes, ConfigConstants.DEFAULT_CHARSET);
 			
 			try {
 				this.key.setValue(Integer.parseInt(line.substring(0,line.indexOf("_"))));
@@ -254,6 +242,18 @@ public class DataSourceTaskTest extends TaskTestBase {
 			target.setField(0, this.key);
 			target.setField(1, this.value);
 			return target;
+		}
+
+		public void openInputFormat() {
+			//ensure this is called only once
+			Assert.assertFalse("Invalid status of the input format. Expected for opened: false, Actual: " + opened, opened);
+			opened = true;
+		}
+
+		public void closeInputFormat() {
+			//ensure this is called only once
+			Assert.assertFalse("Invalid status of the input format. Expected for closed: false, Actual: " + closed, closed);
+			closed = true;
 		}
 	}
 	
@@ -272,7 +272,7 @@ public class DataSourceTaskTest extends TaskTestBase {
 				return null;
 			}
 			
-			String line = new String(record, offset, numBytes);
+			String line = new String(record, offset, numBytes, ConfigConstants.DEFAULT_CHARSET);
 			
 			try {
 				this.key.setValue(Integer.parseInt(line.substring(0,line.indexOf("_"))));
@@ -306,7 +306,7 @@ public class DataSourceTaskTest extends TaskTestBase {
 			
 			this.cnt++;
 			
-			String line = new String(record, offset, numBytes);
+			String line = new String(record, offset, numBytes, ConfigConstants.DEFAULT_CHARSET);
 			
 			try {
 				this.key.setValue(Integer.parseInt(line.substring(0,line.indexOf("_"))));

@@ -16,19 +16,20 @@
  * limitations under the License.
  */
 
-
 package org.apache.flink.core.memory;
 
+import org.apache.flink.annotation.Internal;
 
 /**
  * Interface describing entities that can provide memory segments.
  */
+@Internal
 public interface MemorySegmentSource {
-	
+
 	/**
 	 * Gets the next memory segment. If no more segments are available, it returns null.
-	 * 
+	 *
 	 * @return The next memory segment, or null, if none is available.
 	 */
-	public MemorySegment nextSegment();
+	MemorySegment nextSegment();
 }

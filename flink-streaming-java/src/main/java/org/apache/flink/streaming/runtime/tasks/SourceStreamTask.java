@@ -18,89 +18,181 @@
 
 package org.apache.flink.streaming.runtime.tasks;
 
-import org.apache.flink.streaming.api.operators.Output;
+import org.apache.flink.annotation.Internal;
+import org.apache.flink.runtime.checkpoint.CheckpointMetaData;
+import org.apache.flink.runtime.checkpoint.CheckpointOptions;
+import org.apache.flink.runtime.execution.Environment;
+import org.apache.flink.streaming.api.checkpoint.ExternallyInducedSource;
+import org.apache.flink.streaming.api.functions.source.SourceFunction;
 import org.apache.flink.streaming.api.operators.StreamSource;
-import org.apache.flink.streaming.api.watermark.Watermark;
-import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
+import org.apache.flink.util.FlinkException;
 
 /**
- * Task for executing streaming sources.
+ * {@link StreamTask} for executing a {@link StreamSource}.
  *
- * One important aspect of this is that the checkpointing and the emission of elements must never
+ * <p>One important aspect of this is that the checkpointing and the emission of elements must never
  * occur at the same time. The execution must be serial. This is achieved by having the contract
- * with the StreamFunction that it must only modify its state or emit elements in
+ * with the {@link SourceFunction} that it must only modify its state or emit elements in
  * a synchronized block that locks on the lock Object. Also, the modification of the state
  * and the emission of elements must happen in the same block of code that is protected by the
  * synchronized block.
  *
  * @param <OUT> Type of the output elements of this source.
+ * @param <SRC> Type of the source function for the stream source operator
+ * @param <OP> Type of the stream source operator
  */
-public class SourceStreamTask<OUT> extends StreamTask<OUT, StreamSource<OUT>> {
+@Internal
+public class SourceStreamTask<OUT, SRC extends SourceFunction<OUT>, OP extends StreamSource<OUT, SRC>>
+	extends StreamTask<OUT, OP> {
+
+	private static final Runnable SOURCE_POISON_LETTER = () -> {};
+
+	private volatile boolean externallyInducedCheckpoints;
+
+	public SourceStreamTask(Environment env) {
+		super(env);
+	}
 
 	@Override
 	protected void init() {
-		// does not hold any resources, so no initialization needed
+		// we check if the source is actually inducing the checkpoints, rather
+		// than the trigger
+		SourceFunction<?> source = headOperator.getUserFunction();
+		if (source instanceof ExternallyInducedSource) {
+			externallyInducedCheckpoints = true;
+
+			ExternallyInducedSource.CheckpointTrigger triggerHook = new ExternallyInducedSource.CheckpointTrigger() {
+
+				@Override
+				public void triggerCheckpoint(long checkpointId) throws FlinkException {
+					// TODO - we need to see how to derive those. We should probably not encode this in the
+					// TODO -   source's trigger message, but do a handshake in this task between the trigger
+					// TODO -   message from the master, and the source's trigger notification
+					final CheckpointOptions checkpointOptions = CheckpointOptions.forCheckpointWithDefaultLocation();
+					final long timestamp = System.currentTimeMillis();
+
+					final CheckpointMetaData checkpointMetaData = new CheckpointMetaData(checkpointId, timestamp);
+
+					try {
+						SourceStreamTask.super.triggerCheckpoint(checkpointMetaData, checkpointOptions, false);
+					}
+					catch (RuntimeException | FlinkException e) {
+						throw e;
+					}
+					catch (Exception e) {
+						throw new FlinkException(e.getMessage(), e);
+					}
+				}
+			};
+
+			((ExternallyInducedSource<?, ?>) source).setCheckpointTrigger(triggerHook);
+		}
+	}
+
+	@Override
+	protected void advanceToEndOfEventTime() throws Exception {
+		headOperator.advanceToEndOfEventTime();
 	}
 
 	@Override
 	protected void cleanup() {
 		// does not hold any resources, so no cleanup needed
 	}
-	
 
 	@Override
-	protected void run() throws Exception {
-		final Object checkpointLock = getCheckpointLock();
-		final SourceOutput<StreamRecord<OUT>> output = new SourceOutput<>(getHeadOutput(), checkpointLock);
-		headOperator.run(checkpointLock, output);
+	protected void performDefaultAction(ActionContext context) throws Exception {
+		// Against the usual contract of this method, this implementation is not step-wise but blocking instead for
+		// compatibility reasons with the current source interface (source functions run as a loop, not in steps).
+		final LegacySourceFunctionThread sourceThread = new LegacySourceFunctionThread();
+		sourceThread.start();
+
+		// We run an alternative mailbox loop that does not involve default actions and synchronizes around actions.
+		try {
+			runAlternativeMailboxLoop();
+		} catch (Exception mailboxEx) {
+			// We cancel the source function if some runtime exception escaped the mailbox.
+			if (!isCanceled()) {
+				cancelTask();
+			}
+			throw mailboxEx;
+		}
+
+		sourceThread.join();
+		sourceThread.checkThrowSourceExecutionException();
+
+		context.allActionsCompleted();
 	}
-	
+
+	private void runAlternativeMailboxLoop() throws InterruptedException {
+
+		while (true) {
+
+			Runnable letter = mailbox.takeMail();
+			if (letter == SOURCE_POISON_LETTER) {
+				break;
+			}
+
+			synchronized (getCheckpointLock()) {
+				letter.run();
+			}
+		}
+	}
+
 	@Override
-	protected void cancelTask() throws Exception {
-		headOperator.cancel();
+	protected void cancelTask() {
+		if (headOperator != null) {
+			headOperator.cancel();
+		}
+	}
+
+	@Override
+	protected void finishTask() throws Exception {
+		cancelTask();
 	}
 
 	// ------------------------------------------------------------------------
-	
+	//  Checkpointing
+	// ------------------------------------------------------------------------
+
+	@Override
+	public boolean triggerCheckpoint(CheckpointMetaData checkpointMetaData, CheckpointOptions checkpointOptions, boolean advanceToEndOfEventTime) throws Exception {
+		if (!externallyInducedCheckpoints) {
+			return super.triggerCheckpoint(checkpointMetaData, checkpointOptions, advanceToEndOfEventTime);
+		}
+		else {
+			// we do not trigger checkpoints here, we simply state whether we can trigger them
+			synchronized (getCheckpointLock()) {
+				return isRunning();
+			}
+		}
+	}
+
 	/**
-	 * Special output for sources that ensures that sources synchronize on  the lock object before
-	 * emitting elements.
-	 *
-	 * <p>
-	 * This is required to ensure that no concurrent method calls on operators later in the chain
-	 * can occur. When operators register a timer the timer callback is synchronized
-	 * on the same lock object.
-	 *
-	 * @param <T> The type of elements emitted by the source.
+	 * Runnable that executes the the source function in the head operator.
 	 */
-	private class SourceOutput<T> implements Output<T> {
-		
-		private final Output<T> output;
-		private final Object lockObject;
+	private class LegacySourceFunctionThread extends Thread {
 
-		public SourceOutput(Output<T> output, Object lockObject) {
-			this.output = output;
-			this.lockObject = lockObject;
+		private Throwable sourceExecutionThrowable;
+
+		LegacySourceFunctionThread() {
+			this.sourceExecutionThrowable = null;
 		}
 
 		@Override
-		public void emitWatermark(Watermark mark) {
-			synchronized (lockObject) {
-				output.emitWatermark(mark);
+		public void run() {
+			try {
+				headOperator.run(getCheckpointLock(), getStreamStatusMaintainer(), operatorChain);
+			} catch (Throwable t) {
+				sourceExecutionThrowable = t;
+			} finally {
+				mailbox.clearAndPut(SOURCE_POISON_LETTER);
 			}
 		}
 
-		@Override
-		public void collect(T record) {
-			synchronized (lockObject) {
-				checkTimerException();
-				output.collect(record);
+		void checkThrowSourceExecutionException() throws Exception {
+			if (sourceExecutionThrowable != null) {
+				throw new Exception(sourceExecutionThrowable);
 			}
-		}
-
-		@Override
-		public void close() {
-			output.close();
 		}
 	}
 }

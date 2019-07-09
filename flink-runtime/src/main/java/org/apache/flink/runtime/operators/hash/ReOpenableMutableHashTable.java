@@ -63,8 +63,8 @@ public class ReOpenableMutableHashTable<BT, PT> extends MutableHashTable<BT, PT>
 	}
 	
 	@Override
-	public void open(MutableObjectIterator<BT> buildSide, MutableObjectIterator<PT> probeSide) throws IOException {
-		super.open(buildSide, probeSide);
+	public void open(MutableObjectIterator<BT> buildSide, MutableObjectIterator<PT> probeSide, boolean buildSideOuterJoin) throws IOException {
+		super.open(buildSide, probeSide, buildSideOuterJoin);
 		initialPartitions = new ArrayList<HashPartition<BT, PT>>( partitionsBeingBuilt );
 		initialPartitionFanOut = (byte) partitionsBeingBuilt.size();
 		initialBucketCount = this.numBuckets;
@@ -166,7 +166,7 @@ public class ReOpenableMutableHashTable<BT, PT> extends MutableHashTable<BT, PT>
 	
 	@Override
 	protected void releaseTable() {
-		if(furtherPartitioning | this.currentRecursionDepth > 0) {
+		if(furtherPartitioning || this.currentRecursionDepth > 0) {
 			super.releaseTable();
 		}
 	}

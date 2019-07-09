@@ -17,6 +17,8 @@
 
 package org.apache.flink.streaming.api.functions.sink;
 
+import org.apache.flink.annotation.PublicEvolving;
+
 import java.io.Serializable;
 import java.util.ArrayList;
 
@@ -26,13 +28,17 @@ import java.util.ArrayList;
  *
  * @param <IN>
  *            Input tuple type
+ *
+ * @deprecated Please use the {@code BucketingSink} for writing to files from a streaming program.
  */
+@PublicEvolving
+@Deprecated
 public abstract class WriteFormat<IN> implements Serializable {
 	private static final long serialVersionUID = 1L;
 
 	/**
 	 * Writes the contents of tupleList to the file specified by path.
-	 * 
+	 *
 	 * @param path
 	 *            is the path to the location where the tuples are written
 	 * @param tupleList

@@ -22,33 +22,28 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.apache.flink.api.common.functions.FlatMapFunction;
+import org.apache.flink.api.common.functions.GroupCombineFunction;
+import org.apache.flink.api.common.functions.GroupReduceFunction;
 import org.apache.flink.api.common.operators.util.UserCodeClassWrapper;
-import org.apache.flink.api.common.typeutils.record.RecordComparatorFactory;
-import org.apache.flink.api.common.typeutils.record.RecordSerializerFactory;
-import org.apache.flink.api.common.functions.RichGroupReduceFunction;
+import org.apache.flink.runtime.testutils.recordutils.RecordComparatorFactory;
+import org.apache.flink.runtime.testutils.recordutils.RecordSerializerFactory;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.runtime.io.network.api.writer.ResultPartitionWriter;
 import org.apache.flink.runtime.operators.DriverStrategy;
 import org.apache.flink.runtime.operators.BatchTask;
 import org.apache.flink.runtime.operators.FlatMapDriver;
 import org.apache.flink.runtime.operators.FlatMapTaskTest.MockMapStub;
-import org.apache.flink.runtime.operators.ReduceTaskTest.MockReduceStub;
+import org.apache.flink.runtime.operators.ReduceTaskTest.MockCombiningReduceStub;
 import org.apache.flink.runtime.operators.shipping.ShipStrategyType;
 import org.apache.flink.runtime.operators.testutils.TaskTestBase;
 import org.apache.flink.runtime.operators.testutils.UniformRecordGenerator;
 import org.apache.flink.runtime.operators.util.TaskConfig;
-import org.apache.flink.runtime.taskmanager.Task;
 import org.apache.flink.types.IntValue;
 import org.apache.flink.types.Record;
 import org.apache.flink.util.Collector;
+
 import org.junit.Assert;
 import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.powermock.core.classloader.annotations.PrepareForTest;
-import org.powermock.modules.junit4.PowerMockRunner;
 
-@RunWith(PowerMockRunner.class)
-@PrepareForTest({Task.class, ResultPartitionWriter.class})
 public class ChainTaskTest extends TaskTestBase {
 	
 	private static final int MEMORY_MANAGER_SIZE = 1024 * 1024 * 3;
@@ -94,16 +89,15 @@ public class ChainTaskTest extends TaskTestBase {
 				combineConfig.setRelativeMemoryDriver(memoryFraction);
 				
 				// udf
-				combineConfig.setStubWrapper(new UserCodeClassWrapper<>(MockReduceStub.class));
+				combineConfig.setStubWrapper(new UserCodeClassWrapper<>(MockCombiningReduceStub.class));
 				
 				getTaskConfig().addChainedTask(SynchronousChainedCombineDriver.class, combineConfig, "combine");
 			}
 			
 			// chained map+combine
 			{
-				BatchTask<FlatMapFunction<Record, Record>, Record> testTask =
-											new BatchTask<>();
-				registerTask(testTask, FlatMapDriver.class, MockMapStub.class);
+				registerTask(FlatMapDriver.class, MockMapStub.class);
+				BatchTask<FlatMapFunction<Record, Record>, Record> testTask = new BatchTask<>(this.mockEnv);
 				
 				try {
 					testTask.invoke();
@@ -162,19 +156,16 @@ public class ChainTaskTest extends TaskTestBase {
 			
 			// chained map+combine
 			{
-				final BatchTask<FlatMapFunction<Record, Record>, Record> testTask =
-											new BatchTask<>();
-				
-				super.registerTask(testTask, FlatMapDriver.class, MockMapStub.class);
-	
+				registerTask(FlatMapDriver.class, MockMapStub.class);
+				final BatchTask<FlatMapFunction<Record, Record>, Record> testTask = new BatchTask<>(this.mockEnv);
+
 				boolean stubFailed = false;
-				
 				try {
 					testTask.invoke();
 				} catch (Exception e) {
 					stubFailed = true;
 				}
-				
+
 				Assert.assertTrue("Function exception was not forwarded.", stubFailed);
 			}
 		}
@@ -184,7 +175,9 @@ public class ChainTaskTest extends TaskTestBase {
 		}
 	}
 	
-	public static final class MockFailingCombineStub extends RichGroupReduceFunction<Record, Record> {
+	public static final class MockFailingCombineStub implements
+		GroupReduceFunction<Record, Record>,
+		GroupCombineFunction<Record, Record> {
 		private static final long serialVersionUID = 1L;
 		
 		private int cnt = 0;
@@ -198,6 +191,11 @@ public class ChainTaskTest extends TaskTestBase {
 			for (Record r : records) {
 				out.collect(r);
 			}
+		}
+
+		@Override
+		public void combine(Iterable<Record> values, Collector<Record> out) throws Exception {
+			reduce(values, out);
 		}
 	}
 }

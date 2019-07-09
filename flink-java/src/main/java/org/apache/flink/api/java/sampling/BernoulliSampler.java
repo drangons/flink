@@ -15,9 +15,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.api.java.sampling;
 
-import com.google.common.base.Preconditions;
+import org.apache.flink.annotation.Internal;
+import org.apache.flink.util.Preconditions;
 import org.apache.flink.util.XORShiftRandom;
 
 import java.util.Iterator;
@@ -31,14 +33,15 @@ import java.util.Random;
  * @param <T> The type of sample.
  * @see <a href="http://erikerlandson.github.io/blog/2014/09/11/faster-random-samples-with-gap-sampling/">Gap Sampling</a>
  */
+@Internal
 public class BernoulliSampler<T> extends RandomSampler<T> {
-	
+
 	private final double fraction;
 	private final Random random;
-	
+
 	// THRESHOLD is a tuning parameter for choosing sampling method according to the fraction.
-	private final static double THRESHOLD = 0.33;
-	
+	private static final double THRESHOLD = 0.33;
+
 	/**
 	 * Create a Bernoulli sampler with sample fraction and default random number generator.
 	 *
@@ -47,7 +50,7 @@ public class BernoulliSampler<T> extends RandomSampler<T> {
 	public BernoulliSampler(double fraction) {
 		this(fraction, new XORShiftRandom());
 	}
-	
+
 	/**
 	 * Create a Bernoulli sampler with sample fraction and random number generator seed.
 	 *
@@ -57,7 +60,7 @@ public class BernoulliSampler<T> extends RandomSampler<T> {
 	public BernoulliSampler(double fraction, long seed) {
 		this(fraction, new XORShiftRandom(seed));
 	}
-	
+
 	/**
 	 * Create a Bernoulli sampler with sample fraction and random number generator.
 	 *
@@ -69,7 +72,7 @@ public class BernoulliSampler<T> extends RandomSampler<T> {
 		this.fraction = fraction;
 		this.random = random;
 	}
-	
+
 	/**
 	 * Sample the input elements, for each input element, take a Bernoulli trail for sampling.
 	 *
@@ -79,12 +82,12 @@ public class BernoulliSampler<T> extends RandomSampler<T> {
 	@Override
 	public Iterator<T> sample(final Iterator<T> input) {
 		if (fraction == 0) {
-			return EMPTY_ITERABLE;
+			return emptyIterable;
 		}
-		
+
 		return new SampledIterator<T>() {
 			T current = null;
-			
+
 			@Override
 			public boolean hasNext() {
 				if (current == null) {
@@ -93,7 +96,7 @@ public class BernoulliSampler<T> extends RandomSampler<T> {
 
 				return current != null;
 			}
-			
+
 			@Override
 			public T next() {
 				if (current == null) {

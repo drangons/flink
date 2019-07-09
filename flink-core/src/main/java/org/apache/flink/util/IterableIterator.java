@@ -16,15 +16,17 @@
  * limitations under the License.
  */
 
-
 package org.apache.flink.util;
+
+import org.apache.flink.annotation.Internal;
 
 import java.util.Iterator;
 
 /**
  * An {@link Iterator} that is also {@link Iterable} (often by returning itself).
- * 
+ *
  * @param <E> The iterated elements' type.
  */
+@Internal
 public interface IterableIterator<E> extends Iterator<E>, Iterable<E> {
 }

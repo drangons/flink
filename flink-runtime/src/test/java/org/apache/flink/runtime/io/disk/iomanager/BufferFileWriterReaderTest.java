@@ -22,9 +22,11 @@ import org.apache.flink.core.memory.MemorySegment;
 import org.apache.flink.core.memory.MemorySegmentFactory;
 import org.apache.flink.runtime.io.network.buffer.Buffer;
 import org.apache.flink.runtime.io.network.buffer.BufferRecycler;
-import org.apache.flink.runtime.testutils.DiscardingRecycler;
+import org.apache.flink.runtime.io.network.buffer.FreeingBufferRecycler;
+import org.apache.flink.runtime.io.network.buffer.NetworkBuffer;
 
 import org.junit.After;
+import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -32,7 +34,8 @@ import java.io.IOException;
 import java.util.Random;
 import java.util.concurrent.LinkedBlockingQueue;
 
-import static junit.framework.TestCase.assertEquals;
+import static org.apache.flink.util.Preconditions.checkArgument;
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -41,7 +44,7 @@ public class BufferFileWriterReaderTest {
 
 	private static final int BUFFER_SIZE = 32 * 1024;
 
-	private static final BufferRecycler BUFFER_RECYCLER = new DiscardingRecycler();
+	private static final BufferRecycler BUFFER_RECYCLER = FreeingBufferRecycler.INSTANCE;
 
 	private static final Random random = new Random();
 
@@ -51,7 +54,12 @@ public class BufferFileWriterReaderTest {
 
 	private BufferFileReader reader;
 
-	private LinkedBlockingQueue<Buffer> returnedBuffers = new LinkedBlockingQueue<Buffer>();
+	private LinkedBlockingQueue<Buffer> returnedBuffers = new LinkedBlockingQueue<>();
+
+	@AfterClass
+	public static void shutdown() throws Exception {
+		ioManager.close();
+	}
 
 	@Before
 	public void setUpWriterAndReader() {
@@ -59,7 +67,7 @@ public class BufferFileWriterReaderTest {
 
 		try {
 			writer = ioManager.createBufferFileWriter(channel);
-			reader = ioManager.createBufferFileReader(channel, new QueuingCallback<Buffer>(returnedBuffers));
+			reader = ioManager.createBufferFileReader(channel, new QueuingCallback<>(returnedBuffers));
 		}
 		catch (IOException e) {
 			if (writer != null) {
@@ -100,9 +108,7 @@ public class BufferFileWriterReaderTest {
 
 			int size = getNextMultipleOf(getRandomNumberInRange(minBufferSize, BUFFER_SIZE), 4);
 
-			buffer.setSize(size);
-
-			currentNumber = fillBufferWithAscendingNumbers(buffer, currentNumber);
+			currentNumber = fillBufferWithAscendingNumbers(buffer, currentNumber, size);
 
 			writer.writeBlock(buffer);
 		}
@@ -136,13 +142,11 @@ public class BufferFileWriterReaderTest {
 		int numBuffers = 1024;
 		int currentNumber = 0;
 
-		final int minBufferSize = BUFFER_SIZE / 4;
-
 		// Write buffers filled with ascending numbers...
 		for (int i = 0; i < numBuffers; i++) {
 			final Buffer buffer = createBuffer();
 
-			currentNumber = fillBufferWithAscendingNumbers(buffer, currentNumber);
+			currentNumber = fillBufferWithAscendingNumbers(buffer, currentNumber, buffer.getMaxCapacity());
 
 			writer.writeBlock(buffer);
 		}
@@ -196,25 +200,26 @@ public class BufferFileWriterReaderTest {
 	}
 
 	private Buffer createBuffer() {
-		return new Buffer(MemorySegmentFactory.allocateUnpooledSegment(BUFFER_SIZE), BUFFER_RECYCLER);
+		return new NetworkBuffer(MemorySegmentFactory.allocateUnpooledSegment(BUFFER_SIZE), BUFFER_RECYCLER);
 	}
 
-	public static int fillBufferWithAscendingNumbers(Buffer buffer, int currentNumber) {
-		MemorySegment segment = buffer.getMemorySegment();
+	static int fillBufferWithAscendingNumbers(Buffer buffer, int currentNumber, int size) {
+		checkArgument(size % 4 == 0);
 
-		final int size = buffer.getSize();
+		MemorySegment segment = buffer.getMemorySegment();
 
 		for (int i = 0; i < size; i += 4) {
 			segment.putInt(i, currentNumber++);
 		}
+		buffer.setSize(size);
 
 		return currentNumber;
 	}
 
-	private int verifyBufferFilledWithAscendingNumbers(Buffer buffer, int currentNumber) {
+	static int verifyBufferFilledWithAscendingNumbers(Buffer buffer, int currentNumber) {
 		MemorySegment segment = buffer.getMemorySegment();
 
-		final int size = buffer.getSize();
+		int size = buffer.getSize();
 
 		for (int i = 0; i < size; i += 4) {
 			if (segment.getInt(i) != currentNumber++) {

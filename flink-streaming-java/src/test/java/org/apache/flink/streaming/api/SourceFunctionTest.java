@@ -17,18 +17,22 @@
 
 package org.apache.flink.streaming.api;
 
-import static org.junit.Assert.assertEquals;
+import org.apache.flink.api.common.typeutils.base.IntSerializer;
+import org.apache.flink.core.testutils.CommonTestUtils;
+import org.apache.flink.streaming.api.functions.source.FromElementsFunction;
+import org.apache.flink.streaming.api.functions.source.SourceFunction;
+import org.apache.flink.streaming.util.SourceFunctionUtil;
+
+import org.junit.Test;
 
 import java.util.Arrays;
 import java.util.List;
 
-import org.apache.flink.api.common.typeutils.base.IntSerializer;
-import org.apache.flink.core.testutils.CommonTestUtils;
-import org.apache.flink.streaming.api.functions.source.FromElementsFunction;
-import org.apache.flink.streaming.api.functions.source.StatefulSequenceSource;
-import org.apache.flink.streaming.util.SourceFunctionUtil;
-import org.junit.Test;
+import static org.junit.Assert.assertEquals;
 
+/**
+ * Tests for {@link SourceFunction}.
+ */
 public class SourceFunctionTest {
 
 	@Test
@@ -51,34 +55,5 @@ public class SourceFunctionTest {
 						IntSerializer.INSTANCE,
 						Arrays.asList(1, 2, 3))));
 		assertEquals(expectedList, actualList);
-	}
-
-	@Test
-	public void generateSequenceTest() throws Exception {
-		List<Long> expectedList = Arrays.asList(1L, 2L, 3L, 4L, 5L, 6L, 7L);
-		List<Long> actualList = SourceFunctionUtil.runSourceFunction(new StatefulSequenceSource(1,
-				7));
-		assertEquals(expectedList, actualList);
-	}
-
-	@Test
-	public void socketTextStreamTest() throws Exception {
-		// TODO: does not work because we cannot set the internal socket anymore
-//		List<String> expectedList = Arrays.asList("a", "b", "c");
-//		List<String> actualList = new ArrayList<String>();
-//
-//		byte[] data = { 'a', '\n', 'b', '\n', 'c', '\n' };
-//
-//		Socket socket = mock(Socket.class);
-//		when(socket.getInputStream()).thenReturn(new ByteArrayInputStream(data));
-//		when(socket.isClosed()).thenReturn(false);
-//		when(socket.isConnected()).thenReturn(true);
-//
-//		SocketTextStreamFunction source = new SocketTextStreamFunction("", 0, '\n', 0);
-//		source.open(new Configuration());
-//		while (!source.reachedEnd()) {
-//			actualList.add(source.next());
-//		}
-//		assertEquals(expectedList, actualList);
 	}
 }

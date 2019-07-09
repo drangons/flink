@@ -28,7 +28,7 @@ import org.apache.flink.runtime.util.event.EventListener;
 
 import java.io.IOException;
 
-import static com.google.common.base.Preconditions.checkState;
+import static org.apache.flink.util.Preconditions.checkState;
 
 /**
  * A basic reader implementation, which wraps an input gate and handles events.
@@ -110,7 +110,7 @@ public abstract class AbstractReader implements ReaderBase {
 			throw new IOException("Error while handling event of type " + eventType + ": " + t.getMessage(), t);
 		}
 	}
-	
+
 	public void publish(TaskEvent event){
 		taskEventHandler.publish(event);
 	}
@@ -134,11 +134,8 @@ public abstract class AbstractReader implements ReaderBase {
 
 	@Override
 	public boolean hasReachedEndOfSuperstep() {
-		if (isIterative) {
-			return currentNumberOfEndOfSuperstepEvents == inputGate.getNumberOfInputChannels();
-		}
+		return isIterative && currentNumberOfEndOfSuperstepEvents == inputGate.getNumberOfInputChannels();
 
-		return false;
 	}
 
 	private boolean incrementEndOfSuperstepEventAndCheck() {

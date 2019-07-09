@@ -18,29 +18,24 @@
 
 package org.apache.flink.runtime.util;
 
-import akka.actor.ActorRef;
-import akka.actor.ActorSystem;
-import akka.dispatch.Mapper;
-import akka.dispatch.OnComplete;
-import org.apache.flink.configuration.ConfigConstants;
-import org.apache.flink.configuration.Configuration;
-import org.apache.flink.runtime.akka.AkkaUtils;
-import org.apache.flink.runtime.instance.ActorGateway;
-import org.apache.flink.runtime.instance.AkkaActorGateway;
-import org.apache.flink.runtime.jobmanager.RecoveryMode;
+import org.apache.flink.api.common.time.Time;
+import org.apache.flink.runtime.concurrent.FutureUtils;
 import org.apache.flink.runtime.leaderretrieval.LeaderRetrievalException;
 import org.apache.flink.runtime.leaderretrieval.LeaderRetrievalListener;
 import org.apache.flink.runtime.leaderretrieval.LeaderRetrievalService;
 import org.apache.flink.runtime.net.ConnectionUtils;
+import org.apache.flink.util.FlinkException;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.net.InetAddress;
+import java.util.UUID;
+
 import scala.concurrent.Await;
 import scala.concurrent.Future;
 import scala.concurrent.Promise;
 import scala.concurrent.duration.FiniteDuration;
-
-import java.net.InetAddress;
-import java.util.UUID;
 
 /**
  * Utility class to work with {@link LeaderRetrievalService} class.
@@ -50,63 +45,20 @@ public class LeaderRetrievalUtils {
 	private static final Logger LOG = LoggerFactory.getLogger(LeaderRetrievalUtils.class);
 
 	/**
-	 * Creates a {@link LeaderRetrievalService} based on the provided {@link Configuration} object.
+	 * Retrieves the leader akka url and the current leader session ID. The values are stored in a
+	 * {@link LeaderConnectionInfo} instance.
 	 *
-	 * @param configuration Configuration containing the settings for the {@link LeaderRetrievalService}
-	 * @return The {@link LeaderRetrievalService} specified in the configuration object
-	 * @throws Exception
+	 * @param leaderRetrievalService Leader retrieval service to retrieve the leader connection
+	 *                               information
+	 * @param timeout Timeout when to give up looking for the leader
+	 * @return LeaderConnectionInfo containing the leader's akka URL and the current leader session
+	 * ID
+	 * @throws LeaderRetrievalException
 	 */
-	public static LeaderRetrievalService createLeaderRetrievalService(Configuration configuration)
-		throws Exception {
-
-		RecoveryMode recoveryMode = RecoveryMode.valueOf(
-				configuration.getString(
-						ConfigConstants.RECOVERY_MODE,
-						ConfigConstants.DEFAULT_RECOVERY_MODE).toUpperCase());
-
-		switch (recoveryMode) {
-			case STANDALONE:
-				return StandaloneUtils.createLeaderRetrievalService(configuration);
-			case ZOOKEEPER:
-				return ZooKeeperUtils.createLeaderRetrievalService(configuration);
-			default:
-				throw new Exception("Recovery mode " + recoveryMode + " is not supported.");
-		}
-	}
-
-	/**
-	 * Retrieves the current leader gateway using the given {@link LeaderRetrievalService}. If the
-	 * current leader could not be retrieved after the given timeout, then a
-	 * {@link LeaderRetrievalException} is thrown.
-	 *
-	 * @param leaderRetrievalService {@link LeaderRetrievalService} which is used for the leader retrieval
-	 * @param actorSystem ActorSystem which is used for the {@link LeaderRetrievalListener} implementation
-	 * @param timeout Timeout value for the retrieval call
-	 * @return The current leader gateway
-	 * @throws LeaderRetrievalException If the actor gateway could not be retrieved or the timeout has been exceeded
-	 */
-	public static ActorGateway retrieveLeaderGateway(
+	public static LeaderConnectionInfo retrieveLeaderConnectionInfo(
 			LeaderRetrievalService leaderRetrievalService,
-			ActorSystem actorSystem,
-			FiniteDuration timeout)
-		throws LeaderRetrievalException {
-		LeaderGatewayListener listener = new LeaderGatewayListener(actorSystem, timeout);
-
-		try {
-			leaderRetrievalService.start(listener);
-
-			Future<ActorGateway> actorGatewayFuture = listener.getActorGatewayFuture();
-
-			return Await.result(actorGatewayFuture, timeout);
-		} catch (Exception e) {
-			throw new LeaderRetrievalException("Could not retrieve the leader gateway", e);
-		} finally {
-			try {
-				leaderRetrievalService.stop();
-			} catch (Exception fe) {
-				LOG.warn("Could not stop the leader retrieval service.", fe);
-			}
-		}
+			Time timeout) throws LeaderRetrievalException {
+		return retrieveLeaderConnectionInfo(leaderRetrievalService, FutureUtils.toFiniteDuration(timeout));
 	}
 
 	/**
@@ -146,6 +98,12 @@ public class LeaderRetrievalUtils {
 
 	public static InetAddress findConnectingAddress(
 			LeaderRetrievalService leaderRetrievalService,
+			Time timeout) throws LeaderRetrievalException {
+		return findConnectingAddress(leaderRetrievalService, new FiniteDuration(timeout.getSize(), timeout.getUnit()));
+	}
+
+	public static InetAddress findConnectingAddress(
+			LeaderRetrievalService leaderRetrievalService,
 			FiniteDuration timeout) throws LeaderRetrievalException {
 		ConnectionUtils.LeaderConnectingAddressListener listener = new ConnectionUtils.LeaderConnectingAddressListener();
 
@@ -172,65 +130,6 @@ public class LeaderRetrievalUtils {
 	}
 
 	/**
-	 * Helper class which is used by the retrieveLeaderGateway method as the
-	 * {@link LeaderRetrievalListener}.
-	 */
-	public static class LeaderGatewayListener implements LeaderRetrievalListener {
-
-		private final ActorSystem actorSystem;
-		private final FiniteDuration timeout;
-		private final Object lock = new Object();
-
-		private final Promise<ActorGateway> futureActorGateway = new scala.concurrent.impl.Promise.DefaultPromise<ActorGateway>();
-
-		public LeaderGatewayListener(ActorSystem actorSystem, FiniteDuration timeout) {
-			this.actorSystem = actorSystem;
-			this.timeout = timeout;
-		}
-
-		private void completePromise(ActorGateway gateway) {
-			synchronized (lock) {
-				if (!futureActorGateway.isCompleted()) {
-					futureActorGateway.success(gateway);
-				}
-			}
-		}
-
-		@Override
-		public void notifyLeaderAddress(final String leaderAddress, final UUID leaderSessionID) {
-			if(leaderAddress != null && !leaderAddress.equals("") && !futureActorGateway.isCompleted()) {
-				AkkaUtils.getActorRefFuture(leaderAddress, actorSystem, timeout)
-					.map(new Mapper<ActorRef, ActorGateway>() {
-						public ActorGateway apply(ActorRef ref) {
-							return new AkkaActorGateway(ref, leaderSessionID);
-						}
-					}, actorSystem.dispatcher())
-					.onComplete(new OnComplete<ActorGateway>() {
-						@Override
-						public void onComplete(Throwable failure, ActorGateway success) throws Throwable {
-							if (failure == null) {
-								completePromise(success);
-							} else {
-								LOG.debug("Could not retrieve the leader for address " + leaderAddress + ".", failure);
-							}
-						}
-					}, actorSystem.dispatcher());
-			}
-		}
-
-		@Override
-		public void handleError(Exception exception) {
-			if (!futureActorGateway.isCompleted()) {
-				futureActorGateway.failure(exception);
-			}
-		}
-
-		public Future<ActorGateway> getActorGatewayFuture() {
-			return futureActorGateway.future();
-		}
-	}
-
-	/**
 	 * Helper class which is used by the retrieveLeaderConnectionInfo method to retrieve the
 	 * leader's akka URL and the current leader session ID.
 	 */
@@ -243,8 +142,14 @@ public class LeaderRetrievalUtils {
 
 		@Override
 		public void notifyLeaderAddress(String leaderAddress, UUID leaderSessionID) {
-			if(leaderAddress != null && !leaderAddress.equals("") && !connectionInfo.isCompleted()) {
-				connectionInfo.success(new LeaderConnectionInfo(leaderAddress, leaderSessionID));
+			if (leaderAddress != null && !leaderAddress.equals("") && !connectionInfo.isCompleted()) {
+				try {
+					final LeaderConnectionInfo leaderConnectionInfo = new LeaderConnectionInfo(leaderAddress, leaderSessionID);
+					connectionInfo.success(leaderConnectionInfo);
+				} catch (FlinkException e) {
+					connectionInfo.failure(e);
+				}
+
 			}
 		}
 
@@ -255,7 +160,9 @@ public class LeaderRetrievalUtils {
 			}
 		}
 	}
-
+	
+	// ------------------------------------------------------------------------
+	
 	/**
 	 * Private constructor to prevent instantiation.
 	 */

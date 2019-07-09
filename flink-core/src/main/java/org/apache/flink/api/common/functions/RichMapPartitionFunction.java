@@ -18,6 +18,7 @@
 
 package org.apache.flink.api.common.functions;
 
+import org.apache.flink.annotation.Public;
 import org.apache.flink.util.Collector;
 
 /**
@@ -25,14 +26,15 @@ import org.apache.flink.util.Collector;
  * {@link org.apache.flink.api.common.functions.RuntimeContext} and provides setup and teardown methods:
  * {@link RichFunction#open(org.apache.flink.configuration.Configuration)} and
  * {@link RichFunction#close()}.
- * 
+ *
  * @param <I> Type of the input elements.
  * @param <O> Type of the returned elements.
  */
+@Public
 public abstract class RichMapPartitionFunction<I, O> extends AbstractRichFunction implements MapPartitionFunction<I, O> {
 
 	private static final long serialVersionUID = 1L;
-	
+
 	@Override
 	public abstract void mapPartition(Iterable<I> values, Collector<O> out) throws Exception;
 }

@@ -19,6 +19,7 @@
 
 package org.apache.flink.types;
 
+import org.apache.flink.annotation.Public;
 import org.apache.flink.core.memory.MemorySegment;
 
 
@@ -34,8 +35,9 @@ import org.apache.flink.core.memory.MemorySegment;
  * key. A normalized key is considered a prefix, if its length is less than the maximal normalized
  * key length.
  */
-public interface NormalizableKey<T> extends Key<T> {
-	
+@Public
+public interface NormalizableKey<T> extends Comparable<T>, Key<T> {
+
 	/**
 	 * Gets the maximal length of normalized keys that the data type would produce to determine
 	 * the order of instances solely by the normalized key. A value of {@link java.lang.Integer}.MAX_VALUE
@@ -53,7 +55,7 @@ public interface NormalizableKey<T> extends Key<T> {
 	 * an writing exactly the given number of bytes. Note that the comparison of the bytes is treating the bytes
 	 * as unsigned bytes: {@code int byteI = bytes[i] & 0xFF;}
 	 * <p>
-	 * If the meaningful part of the normalized key takes less than the given number of bytes, than it must be padded.
+	 * If the meaningful part of the normalized key takes less than the given number of bytes, then it must be padded.
 	 * Padding is typically required for variable length data types, such as strings. The padding uses a special
 	 * character, either {@code 0} or {@code 0xff}, depending on whether shorter values are sorted to the beginning or
 	 * the end. 

@@ -18,19 +18,16 @@
 
 package org.apache.flink.api.java.io;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
-
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.api.common.typeutils.TypeSerializerConfigSnapshot;
 import org.apache.flink.api.java.typeutils.TypeExtractor;
 import org.apache.flink.core.io.GenericInputSplit;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
+
 import org.junit.Test;
 
 import java.io.ByteArrayInputStream;
@@ -45,9 +42,17 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
+/**
+ * Tests for {@link CollectionInputFormat}.
+ */
 public class CollectionInputFormatTest {
-	
-	public static class ElementType {
+
+	private static class ElementType {
 		private final int id;
 
 		public ElementType(){
@@ -64,23 +69,32 @@ public class CollectionInputFormatTest {
 
 		@Override
 		public boolean equals(Object obj) {
-			if (obj != null && obj instanceof ElementType) {
+			if (obj instanceof ElementType) {
 				ElementType et = (ElementType) obj;
 				return et.getId() == this.getId();
 			} else {
 				return false;
 			}
 		}
-		
+
 		@Override
 		public int hashCode() {
 			return id;
+		}
+
+		@Override
+		public String toString() {
+			return "ElementType{" +
+				"id=" + id +
+				'}';
 		}
 	}
 
 	@Test
 	public void testSerializability() {
-		try {
+		try (ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+			ObjectOutputStream out = new ObjectOutputStream(buffer)) {
+
 			Collection<ElementType> inputCollection = new ArrayList<ElementType>();
 			ElementType element1 = new ElementType(1);
 			ElementType element2 = new ElementType(2);
@@ -88,15 +102,12 @@ public class CollectionInputFormatTest {
 			inputCollection.add(element1);
 			inputCollection.add(element2);
 			inputCollection.add(element3);
-	
+
 			@SuppressWarnings("unchecked")
 			TypeInformation<ElementType> info = (TypeInformation<ElementType>) TypeExtractor.createTypeInfo(ElementType.class);
-	
+
 			CollectionInputFormat<ElementType> inputFormat = new CollectionInputFormat<ElementType>(inputCollection,
 					info.createSerializer(new ExecutionConfig()));
-
-			ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-			ObjectOutputStream out = new ObjectOutputStream(buffer);
 
 			out.writeObject(inputFormat);
 
@@ -114,22 +125,23 @@ public class CollectionInputFormatTest {
 			inputFormat.open(inputSplit);
 			result.open(inputSplit);
 
-			while(!inputFormat.reachedEnd() && !result.reachedEnd()){
+			while (!inputFormat.reachedEnd() && !result.reachedEnd()){
 				ElementType expectedElement = inputFormat.nextRecord(null);
 				ElementType actualElement = result.nextRecord(null);
 
 				assertEquals(expectedElement, actualElement);
 			}
 		}
-		catch(Exception e) {
+		catch (Exception e) {
 			e.printStackTrace();
 			fail(e.toString());
 		}
+
 	}
-	
+
 	@Test
 	public void testSerializabilityStrings() {
-		
+
 		final String[] data = new String[] {
 				"To be, or not to be,--that is the question:--",
 				"Whether 'tis nobler in the mind to suffer",
@@ -167,33 +179,33 @@ public class CollectionInputFormatTest {
 				"The fair Ophelia!--Nymph, in thy orisons",
 				"Be all my sins remember'd."
 		};
-		
+
 		try {
 			List<String> inputCollection = Arrays.asList(data);
 			CollectionInputFormat<String> inputFormat = new CollectionInputFormat<String>(inputCollection, BasicTypeInfo.STRING_TYPE_INFO.createSerializer(new ExecutionConfig()));
-			
+
 			// serialize
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
 			ObjectOutputStream oos = new ObjectOutputStream(baos);
 			oos.writeObject(inputFormat);
 			oos.close();
-			
+
 			// deserialize
 			ByteArrayInputStream bais = new ByteArrayInputStream(baos.toByteArray());
 			ObjectInputStream ois = new ObjectInputStream(bais);
 			Object result = ois.readObject();
-			
+
 			assertTrue(result instanceof CollectionInputFormat);
-			
+
 			int i = 0;
 			@SuppressWarnings("unchecked")
 			CollectionInputFormat<String> in = (CollectionInputFormat<String>) result;
 			in.open(new GenericInputSplit(0, 1));
-			
+
 			while (!in.reachedEnd()) {
 				assertEquals(data[i++], in.nextRecord(""));
 			}
-			
+
 			assertEquals(data.length, i);
 		}
 		catch (Exception e) {
@@ -201,17 +213,15 @@ public class CollectionInputFormatTest {
 			fail(e.getMessage());
 		}
 	}
-	
+
 	@Test
 	public void testSerializationFailure() {
-		try {
+		try (ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+			ObjectOutputStream out = new ObjectOutputStream(buffer)) {
 			// a mock serializer that fails when writing
 			CollectionInputFormat<ElementType> inFormat = new CollectionInputFormat<ElementType>(
 					Collections.singleton(new ElementType()), new TestSerializer(false, true));
-			
-			ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-			ObjectOutputStream out = new ObjectOutputStream(buffer);
-			
+
 			try {
 				out.writeObject(inFormat);
 				fail("should throw an exception");
@@ -228,22 +238,21 @@ public class CollectionInputFormatTest {
 			fail(e.getMessage());
 		}
 	}
-	
+
 	@Test
 	public void testDeserializationFailure() {
-		try {
+		try (ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+			ObjectOutputStream out = new ObjectOutputStream(buffer)) {
 			// a mock serializer that fails when writing
 			CollectionInputFormat<ElementType> inFormat = new CollectionInputFormat<ElementType>(
 					Collections.singleton(new ElementType()), new TestSerializer(true, false));
-			
-			ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-			ObjectOutputStream out = new ObjectOutputStream(buffer);
+
 			out.writeObject(inFormat);
 			out.close();
-			
+
 			ByteArrayInputStream bais = new ByteArrayInputStream(buffer.toByteArray());
 			ObjectInputStream in = new ObjectInputStream(bais);
-			
+
 			try {
 				in.readObject();
 				fail("should throw an exception");
@@ -257,18 +266,48 @@ public class CollectionInputFormatTest {
 			fail(e.getMessage());
 		}
 	}
-	
+
+	@Test
+	public void testToStringOnSmallCollection() {
+		ArrayList<ElementType> smallList = new ArrayList<>();
+		smallList.add(new ElementType(1));
+		smallList.add(new ElementType(2));
+		CollectionInputFormat<ElementType> inputFormat = new CollectionInputFormat<>(
+			smallList,
+			new TestSerializer(true, false)
+		);
+
+		assertEquals("[ElementType{id=1}, ElementType{id=2}]", inputFormat.toString());
+	}
+
+	@Test
+	public void testToStringOnBigCollection() {
+		ArrayList<ElementType> list = new ArrayList<>();
+		for (int i = 0; i < 10; i++) {
+			list.add(new ElementType(i));
+		}
+		CollectionInputFormat<ElementType> inputFormat = new CollectionInputFormat<>(
+			list,
+			new TestSerializer(true, false)
+		);
+
+		assertEquals(
+			"[ElementType{id=0}, ElementType{id=1}, ElementType{id=2}, " +
+			"ElementType{id=3}, ElementType{id=4}, ElementType{id=5}, ...]",
+			inputFormat.toString());
+	}
+
 	private static class TestException extends IOException{
 		private static final long serialVersionUID = 1L;
 	}
-	
+
 	private static class TestSerializer extends TypeSerializer<ElementType> {
 
 		private static final long serialVersionUID = 1L;
-		
+
 		private final boolean failOnRead;
 		private final boolean failOnWrite;
-		
+
 		public TestSerializer(boolean failOnRead, boolean failOnWrite) {
 			this.failOnRead = failOnRead;
 			this.failOnWrite = failOnWrite;
@@ -338,20 +377,20 @@ public class CollectionInputFormatTest {
 			if (obj instanceof TestSerializer) {
 				TestSerializer other = (TestSerializer) obj;
 
-				return other.canEqual(this) && failOnRead == other.failOnRead && failOnWrite == other.failOnWrite;
+				return failOnRead == other.failOnRead && failOnWrite == other.failOnWrite;
 			} else {
 				return false;
 			}
 		}
 
 		@Override
-		public boolean canEqual(Object obj) {
-			return obj instanceof TestSerializer;
+		public int hashCode() {
+			return Objects.hash(failOnRead, failOnWrite);
 		}
 
 		@Override
-		public int hashCode() {
-			return Objects.hash(failOnRead, failOnWrite);
+		public TypeSerializerConfigSnapshot<ElementType> snapshotConfiguration() {
+			throw new UnsupportedOperationException();
 		}
 	}
 }

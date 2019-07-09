@@ -21,6 +21,7 @@ package org.apache.flink.types;
 
 import java.io.IOException;
 
+import org.apache.flink.annotation.Public;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
 import org.apache.flink.core.memory.MemorySegment;
@@ -28,9 +29,8 @@ import org.apache.flink.core.memory.MemorySegment;
 /**
  * Boxed serializable and comparable character type, representing the primitive
  * type {@code char}.
- * 
- * @see org.apache.flink.types.Key
  */
+@Public
 public class CharValue implements NormalizableKey<CharValue>, ResettableValue<CharValue>, CopyableValue<CharValue> {
 	private static final long serialVersionUID = 1L;
 	
@@ -124,7 +124,7 @@ public class CharValue implements NormalizableKey<CharValue>, ResettableValue<Ch
 	@Override
 	public void copyNormalizedKey(MemorySegment target, int offset, int len) {
 		// note that the char is an unsigned data type in java and consequently needs
-		// no code that transforms the signed representation to an offsetted representation
+		// no code that transforms the signed representation to an offset representation
 		// that is equivalent to unsigned, when compared byte by byte
 		if (len == 2) {
 			// default case, full normalized key

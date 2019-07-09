@@ -16,11 +16,13 @@
  * limitations under the License.
  */
 
-
 package org.apache.flink.api.common.operators;
 
 import java.util.List;
 
+import org.apache.flink.annotation.Internal;
+import org.apache.flink.annotation.PublicEvolving;
+import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.operators.util.UserCodeWrapper;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.configuration.Configuration;
@@ -32,6 +34,7 @@ import org.apache.flink.util.Visitable;
  *
  * @param <OUT> Output type of the records output by this operator
 */
+@Internal
 public abstract class Operator<OUT> implements Visitable<Operator<?>> {
 	
 	protected final Configuration parameters;			// the parameters to parameterize the UDF
@@ -40,7 +43,11 @@ public abstract class Operator<OUT> implements Visitable<Operator<?>> {
 	
 	protected String name;								// the name of the contract instance. optional.
 		
-	private int parallelism = -1;				// the number of parallel instances to use. -1, if unknown
+	private int parallelism = ExecutionConfig.PARALLELISM_DEFAULT;  // the number of parallel instances to use
+
+	private ResourceSpec minResources = ResourceSpec.DEFAULT;          // the minimum resource of the contract instance.
+
+	private ResourceSpec preferredResources = ResourceSpec.DEFAULT;    // the preferred resource of the contract instance.
 
 	/**
 	 * The return type of the user function.
@@ -160,9 +167,10 @@ public abstract class Operator<OUT> implements Visitable<Operator<?>> {
 	}
 
 	/**
-	 * Gets the parallelism for this contract instance. The parallelism denotes
-	 * how many parallel instances of the user function will be spawned during the execution. If this
-	 * value is <code>-1</code>, then the system will decide the number of parallel instances by itself.
+	 * Gets the parallelism for this contract instance. The parallelism denotes how many
+	 * parallel instances of the user function will be spawned during the execution. If this
+	 * value is {@link ExecutionConfig#PARALLELISM_DEFAULT}, then the system will decide the
+	 * number of parallel instances by itself.
 	 *
 	 * @return The parallelism.
 	 */
@@ -172,13 +180,48 @@ public abstract class Operator<OUT> implements Visitable<Operator<?>> {
 
 	/**
 	 * Sets the parallelism for this contract instance. The parallelism denotes
-	 * how many parallel instances of the user function will be spawned during the execution. Set this
-	 * value to <code>-1</code> to let the system decide on its own.
+	 * how many parallel instances of the user function will be spawned during the execution.
 	 *
-	 * @param parallelism The number of parallel instances to spawn. -1, if unspecified.
+	 * @param parallelism The number of parallel instances to spawn. Set this value to
+	 *        {@link ExecutionConfig#PARALLELISM_DEFAULT} to let the system decide on its own.
 	 */
 	public void setParallelism(int parallelism) {
 		this.parallelism = parallelism;
+	}
+
+	/**
+	 * Gets the minimum resources for this operator. The minimum resources denotes how many
+	 * resources will be needed at least minimum for the operator or user function during the execution.
+	 *
+	 * @return The minimum resources of this operator.
+	 */
+	@PublicEvolving
+	public ResourceSpec getMinResources() {
+		return this.minResources;
+	}
+
+	/**
+	 * Gets the preferred resources for this contract instance. The preferred resources denote how many
+	 * resources will be needed in the maximum for the user function during the execution.
+	 *
+	 * @return The preferred resource of this operator.
+	 */
+	@PublicEvolving
+	public ResourceSpec getPreferredResources() {
+		return this.preferredResources;
+	}
+
+	/**
+	 * Sets the minimum and preferred resources for this contract instance. The resource denotes
+	 * how many memories and cpu cores of the user function will be consumed during the execution.
+	 *
+	 * @param minResources The minimum resource of this operator.
+	 * @param preferredResources The preferred resource of this operator.
+	 */
+	@PublicEvolving
+	public void setResources(ResourceSpec minResources, ResourceSpec preferredResources) {
+		this.minResources = minResources;
+		this.preferredResources = preferredResources;
 	}
 	
 	

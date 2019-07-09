@@ -19,18 +19,22 @@
 package org.apache.flink.api.common.operators.base;
 
 import org.apache.flink.api.common.ExecutionConfig;
+import org.apache.flink.api.common.TaskInfo;
 import org.apache.flink.api.common.accumulators.Accumulator;
 import org.apache.flink.api.common.functions.CoGroupFunction;
 import org.apache.flink.api.common.functions.RichCoGroupFunction;
 import org.apache.flink.api.common.functions.RuntimeContext;
 import org.apache.flink.api.common.functions.util.RuntimeUDFContext;
 import org.apache.flink.api.common.operators.BinaryOperatorInformation;
+import org.apache.flink.api.common.typeinfo.TypeHint;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.tuple.builder.Tuple2Builder;
-import org.apache.flink.api.java.typeutils.TypeInfoParser;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.fs.Path;
+import org.apache.flink.metrics.groups.UnregisteredMetricsGroup;
 import org.apache.flink.util.Collector;
+
 import org.junit.Assert;
 import org.junit.Test;
 
@@ -43,6 +47,9 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.Future;
 
+/**
+ * Tests for {@link CoGroupOperatorBase} on collections.
+ */
 @SuppressWarnings("serial")
 public class CoGroupOperatorCollectionTest implements Serializable {
 
@@ -74,7 +81,9 @@ public class CoGroupOperatorCollectionTest implements Serializable {
 			ExecutionConfig executionConfig = new ExecutionConfig();
 			final HashMap<String, Accumulator<?, ?>> accumulators = new HashMap<String, Accumulator<?, ?>>();
 			final HashMap<String, Future<Path>> cpTasks = new HashMap<>();
-			final RuntimeContext ctx = new RuntimeUDFContext("Test UDF", 4, 0, null, executionConfig, cpTasks, accumulators);
+			final TaskInfo taskInfo = new TaskInfo("Test UDF", 4, 0, 4, 0);
+			final RuntimeContext ctx = new RuntimeUDFContext(
+					taskInfo, null, executionConfig, cpTasks, accumulators, new UnregisteredMetricsGroup());
 
 			{
 				SumCoGroup udf1 = new SumCoGroup();
@@ -89,7 +98,7 @@ public class CoGroupOperatorCollectionTest implements Serializable {
 
 				Assert.assertTrue(udf1.isClosed);
 				Assert.assertTrue(udf2.isClosed);
-				
+
 				Set<Tuple2<String, Integer>> expected = new HashSet<Tuple2<String, Integer>>(
 						Arrays.asList(new Tuple2Builder<String, Integer>()
 										.add("foo", 8)
@@ -175,14 +184,11 @@ public class CoGroupOperatorCollectionTest implements Serializable {
 			Tuple2<String, Integer>>> getCoGroupOperator(
 			RichCoGroupFunction<Tuple2<String, Integer>, Tuple2<String, Integer>, Tuple2<String, Integer>> udf) {
 
-		return new CoGroupOperatorBase<Tuple2<String, Integer>, Tuple2<String, Integer>, Tuple2<String, Integer>,
-				CoGroupFunction<Tuple2<String, Integer>, Tuple2<String, Integer>, Tuple2<String, Integer>>>(
+		TypeInformation<Tuple2<String, Integer>> tuple2Info = TypeInformation.of(new TypeHint<Tuple2<String, Integer>>(){});
+
+		return new CoGroupOperatorBase<>(
 				udf,
-				new BinaryOperatorInformation<Tuple2<String, Integer>, Tuple2<String, Integer>, Tuple2<String, Integer>>(
-						TypeInfoParser.<Tuple2<String, Integer>>parse("Tuple2<String, Integer>"),
-						TypeInfoParser.<Tuple2<String, Integer>>parse("Tuple2<String, Integer>"),
-						TypeInfoParser.<Tuple2<String, Integer>>parse("Tuple2<String, Integer>")
-				),
+				new BinaryOperatorInformation<>(tuple2Info, tuple2Info, tuple2Info),
 				new int[]{0},
 				new int[]{0},
 				"coGroup on Collections"

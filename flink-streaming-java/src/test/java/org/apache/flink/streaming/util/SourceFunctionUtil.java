@@ -17,55 +17,66 @@
 
 package org.apache.flink.streaming.util;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-
 import org.apache.flink.api.common.ExecutionConfig;
-import org.apache.flink.api.common.accumulators.Accumulator;
 import org.apache.flink.api.common.functions.RichFunction;
 import org.apache.flink.api.common.functions.RuntimeContext;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.operators.testutils.MockEnvironment;
+import org.apache.flink.runtime.operators.testutils.MockEnvironmentBuilder;
 import org.apache.flink.runtime.operators.testutils.MockInputSplitProvider;
-import org.apache.flink.streaming.api.functions.source.EventTimeSourceFunction;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
-import org.apache.flink.streaming.api.operators.Output;
-import org.apache.flink.streaming.api.operators.StreamSource;
-import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.api.operators.StreamingRuntimeContext;
 
-import static org.mockito.Mockito.*;
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 
-public class SourceFunctionUtil<T> {
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
-	public static <T> List<T> runSourceFunction(SourceFunction<T> sourceFunction) throws Exception {
-		List<T> outputs = new ArrayList<T>();
-		
+/**
+ * Utilities for {@link SourceFunction}.
+ */
+public class SourceFunctionUtil {
+
+	public static <T extends Serializable> List<T> runSourceFunction(SourceFunction<T> sourceFunction) throws Exception {
 		if (sourceFunction instanceof RichFunction) {
+			return runRichSourceFunction(sourceFunction);
+		}
+		else {
+			return runNonRichSourceFunction(sourceFunction);
+		}
+	}
+
+	private static <T extends Serializable> List<T> runRichSourceFunction(SourceFunction<T> sourceFunction) throws Exception {
+		try (MockEnvironment environment =
+				new MockEnvironmentBuilder()
+					.setTaskName("MockTask")
+					.setMemorySize(3 * 1024 * 1024)
+					.setInputSplitProvider(new MockInputSplitProvider())
+					.setBufferSize(1024)
+					.build()) {
 
 			AbstractStreamOperator<?> operator = mock(AbstractStreamOperator.class);
 			when(operator.getExecutionConfig()).thenReturn(new ExecutionConfig());
-			
-			RuntimeContext runtimeContext =  new StreamingRuntimeContext(
-					operator,
-					new MockEnvironment("MockTask", 3 * 1024 * 1024, new MockInputSplitProvider(), 1024),
-					new HashMap<String, Accumulator<?, ?>>());
-			
-			((RichFunction) sourceFunction).setRuntimeContext(runtimeContext);
 
+			RuntimeContext runtimeContext = new StreamingRuntimeContext(
+				operator,
+				environment,
+				new HashMap<>());
+			((RichFunction) sourceFunction).setRuntimeContext(runtimeContext);
 			((RichFunction) sourceFunction).open(new Configuration());
+
+			return runNonRichSourceFunction(sourceFunction);
 		}
+	}
+
+	private static <T extends Serializable> List<T> runNonRichSourceFunction(SourceFunction<T> sourceFunction) {
+		final List<T> outputs = new ArrayList<>();
 		try {
-			final Output<StreamRecord<T>> collector = new MockOutput<T>(outputs);
-			final Object lockingObject = new Object();
-			SourceFunction.SourceContext<T> ctx;
-			if (sourceFunction instanceof EventTimeSourceFunction) {
-				ctx = new StreamSource.ManualWatermarkContext<T>(lockingObject, collector);
-			} else {
-				ctx = new StreamSource.NonWatermarkContext<T>(lockingObject, collector);
-			}
+			SourceFunction.SourceContext<T> ctx = new CollectingSourceContext<T>(new Object(), outputs);
 			sourceFunction.run(ctx);
 		} catch (Exception e) {
 			throw new RuntimeException("Cannot invoke source.", e);
